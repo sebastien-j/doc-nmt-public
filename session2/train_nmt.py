@@ -16,31 +16,31 @@ def main(job_id, params):
                      lrate=params['learning-rate'][0],
                      optimizer=params['optimizer'][0], 
                      patience=1000,
-                     maxlen=50,
+                     maxlen=100,
                      batch_size=32,
                      valid_batch_size=32,
                      validFreq=100,
                      dispFreq=10,
                      saveFreq=100,
                      sampleFreq=100,
-                     datasets=['../data/hal/train/tok/en', 
-                               '../data/hal/train/tok/fr'],
-                     valid_datasets=['../data/hal/dev/tok/en',
-                                     '../data/hal/dev/tok/fr'],
-                     dictionaries=['../data/hal/train/tok/en.pkl', 
-                                   '../data/hal/train/tok/fr.pkl'],
+                     datasets=['/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000', 
+                               '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000'],
+                     valid_datasets=['/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.first1000', 
+                               '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.first1000'],
+                     dictionaries=['/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.pkl', 
+                                   '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.pkl'],
                      use_dropout=params['use-dropout'][0])
     return validerr
 
 if __name__ == '__main__':
     main(0, {
-        'model': ['model_hal.npz'],
-        'dim_word': [512],
-        'dim': [1024],
-        'n-words': [30000], 
+        'model': ['/misc/kcgscratch1/WIT3/en-fr/models/debug_model.npz'],
+        'dim_word': [167],
+        'dim': [243],
+        'n-words': [10000], 
         'optimizer': ['adadelta'],
         'decay-c': [0.], 
         'clip-c': [1.], 
         'use-dropout': [False],
         'learning-rate': [0.0001],
-        'reload': [True]})
+        'reload': [False]})

@@ -25,10 +25,10 @@ def main(job_id, params):
                      sampleFreq=100,
                      datasets=['/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000', 
                                '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000',
-                               '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.context.bpe10000'],
+                               '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000'],
                      valid_datasets=['/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.first1000', 
                                '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.first1000',
-                               '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.context.bpe10000.first1000'],
+                               '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.first1000'],
                      dictionaries=['/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.pkl', 
                                    '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.pkl'],
                      use_dropout=params['use-dropout'][0])
@@ -45,4 +45,4 @@ if __name__ == '__main__':
         'clip-c': [1.], 
         'use-dropout': [False],
         'learning-rate': [0.0001],
-        'reload': [True]})
+        'reload': [False]})
