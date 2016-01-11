@@ -23,18 +23,19 @@ def main(job_id, params):
                      dispFreq=10,
                      saveFreq=100,
                      sampleFreq=100,
-                     datasets=['/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000', 
-                               '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000'],
-                     valid_datasets=['/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.first1000', 
-                               '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.first1000'],
-                     dictionaries=['/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.pkl', 
-                                   '/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.pkl'],
-                     use_dropout=params['use-dropout'][0])
+                     datasets=['/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000', 
+                               '/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000'],
+                     valid_datasets=['/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.first1000', 
+                               '/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.first1000'],
+                     dictionaries=['/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.pkl', 
+                                   '/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.pkl'],
+                     use_dropout=params['use-dropout'][0],
+                     decoder='gru_cond_legacy')
     return validerr
 
 if __name__ == '__main__':
     main(0, {
-        'model': ['/misc/kcgscratch1/WIT3/en-fr/models/debug_model.npz'],
+        'model': ['/home/sebastien/Documents/WIT3/en-fr/models/debug_model.npz'],
         'dim_word': [167],
         'dim': [243],
         'n-words': [10000], 
