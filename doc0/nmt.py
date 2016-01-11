@@ -158,46 +158,58 @@ def concatenate(tensor_list, axis=0):
 
 
 # batch preparation
-def prepare_data(seqs_x, seqs_y, maxlen=None, n_words_src=30000,
+def prepare_data(seqs_x, seqs_y, seqs_xc, maxlen=None, n_words_src=30000,
                  n_words=30000):
     # x: a list of sentences
     lengths_x = [len(s) for s in seqs_x]
     lengths_y = [len(s) for s in seqs_y]
+    lengths_xc = [len(s) for s in seqs_xc]
 
     if maxlen is not None:
         new_seqs_x = []
         new_seqs_y = []
+        new_seqs_xc = []
         new_lengths_x = []
         new_lengths_y = []
-        for l_x, s_x, l_y, s_y in zip(lengths_x, seqs_x, lengths_y, seqs_y):
+        new_lengths_xc = []
+        for l_x, s_x, l_y, s_y, l_xc, s_xc in zip(lengths_x, seqs_x, lengths_y, seqs_y, lengths_xc, seqs_xc):
             if l_x < maxlen and l_y < maxlen:
                 new_seqs_x.append(s_x)
                 new_lengths_x.append(l_x)
                 new_seqs_y.append(s_y)
                 new_lengths_y.append(l_y)
+                new_seqs_xc.append(s_xc)
+                new_lengths_xc.append(l_xc)
         lengths_x = new_lengths_x
         seqs_x = new_seqs_x
         lengths_y = new_lengths_y
         seqs_y = new_seqs_y
+        lengths_xc = new_lengths_xc
+        seqs_xc = new_seqs_xc
 
         if len(lengths_x) < 1 or len(lengths_y) < 1:
-            return None, None, None, None
+            return None, None, None, None, None, None
 
     n_samples = len(seqs_x)
     maxlen_x = numpy.max(lengths_x) + 1
     maxlen_y = numpy.max(lengths_y) + 1
+    maxlen_xc = numpy.max(lengths_xc) # No need for EOS
 
     x = numpy.zeros((maxlen_x, n_samples)).astype('int64')
     y = numpy.zeros((maxlen_y, n_samples)).astype('int64')
+    xc = numpy.zeros((maxlen_xc, n_samples)).astype('int64')
     x_mask = numpy.zeros((maxlen_x, n_samples)).astype('float32')
     y_mask = numpy.zeros((maxlen_y, n_samples)).astype('float32')
-    for idx, [s_x, s_y] in enumerate(zip(seqs_x, seqs_y)):
+    xc_mask = numpy.zeros((maxlen_xc, n_samples)).astype('float32')
+    for idx, [s_x, s_y, s_xc] in enumerate(zip(seqs_x, seqs_y, seqs_xc)):
         x[:lengths_x[idx], idx] = s_x
         x_mask[:lengths_x[idx]+1, idx] = 1.
         y[:lengths_y[idx], idx] = s_y
         y_mask[:lengths_y[idx]+1, idx] = 1.
+        xc[:lengths_xc[idx], idx] = s_xc
+        xc_mask[:lengths_xc[idx], idx] = 1. # No need for EOS
 
-    return x, x_mask, y, y_mask
+    return x, x_mask, y, y_mask, xc, xc_mask
 
 
 # feedforward layer: affine transformation + point-wise nonlinearity
@@ -251,7 +263,7 @@ def param_init_gru(options, params, prefix='gru', nin=None, dim=None):
 
 
 def gru_layer(tparams, state_below, options, prefix='gru', mask=None,
-              **kwargs):
+              init_state=None, **kwargs):
     nsteps = state_below.shape[0]
     if state_below.ndim == 3:
         n_samples = state_below.shape[1]
@@ -303,14 +315,15 @@ def gru_layer(tparams, state_below, options, prefix='gru', mask=None,
 
     # prepare scan arguments
     seqs = [mask, state_below_, state_belowx]
-    init_states = [tensor.alloc(0., n_samples, dim)]
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
     _step = _step_slice
     shared_vars = [tparams[_p(prefix, 'U')],
                    tparams[_p(prefix, 'Ux')]]
 
     rval, updates = theano.scan(_step,
                                 sequences=seqs,
-                                outputs_info=init_states,
+                                outputs_info=init_state,
                                 non_sequences=shared_vars,
                                 name=_p(prefix, '_layers'),
                                 n_steps=nsteps,
@@ -523,6 +536,14 @@ def init_params(options):
     params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word'])
     params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word'])
 
+    params = get_layer('ff')[0](options, params, prefix='f_context_emb',
+                                nin=options['dim_word'], nout=options['dim'],
+                                ortho=False)
+
+    params = get_layer('ff')[0](options, params, prefix='r_context_emb',
+                                nin=options['dim_word'], nout=options['dim'],
+                                ortho=False)
+
     # encoder: bidirectional RNN
     params = get_layer(options['encoder'])[0](options, params,
                                               prefix='encoder',
@@ -572,6 +593,8 @@ def build_model(tparams, options):
     x_mask = tensor.matrix('x_mask', dtype='float32')
     y = tensor.matrix('y', dtype='int64')
     y_mask = tensor.matrix('y_mask', dtype='float32')
+    xc = tensor.matrix('xc', dtype='int64')
+    xc_mask = tensor.matrix('xc_mask', dtype='float32')    
 
     # for the backward rnn, we just need to invert x and x_mask
     xr = x[::-1]
@@ -579,20 +602,33 @@ def build_model(tparams, options):
 
     n_timesteps = x.shape[0]
     n_timesteps_trg = y.shape[0]
+    n_timesteps_context = xc.shape[0]
     n_samples = x.shape[1]
+
+    context_emb = tparams['Wemb'][xc.flatten()]
+    context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
+
+    # If no context, context_emb is 0
+    context_emb = (context_emb * xc_mask[:,:,None]).sum(0) / tensor.clip(xc_mask.sum(0), 1.0, numpy.inf)[:, None] # n_samples x options['dim_word'], n_samples x 1
+    f_context_emb = get_layer('ff')[1](tparams, context_emb, options,
+                                    prefix='f_context_emb', activ='tanh')
+    r_context_emb = get_layer('ff')[1](tparams, context_emb, options,
+                                    prefix='r_context_emb', activ='tanh')
 
     # word embedding for forward rnn (source)
     emb = tparams['Wemb'][x.flatten()]
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word']])
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder',
-                                            mask=x_mask)
+                                            mask=x_mask,
+                                            init_state=f_context_emb)
     # word embedding for backward rnn (source)
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
                                              prefix='encoder_r',
-                                             mask=xr_mask)
+                                             mask=xr_mask,
+                                             init_state=r_context_emb)
 
     # context will be the concatenation of forward and backward rnns
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
@@ -656,15 +692,27 @@ def build_model(tparams, options):
     cost = cost.reshape([y.shape[0], y.shape[1]])
     cost = (cost * y_mask).sum(0)
 
-    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost
+    return trng, use_noise, x, x_mask, y, y_mask, xc, xc_mask, opt_ret, cost
 
 
 # build a sampler
 def build_sampler(tparams, options, trng):
     x = tensor.matrix('x', dtype='int64')
+    xc = tensor.matrix('xc', dtype='int64')
+
     xr = x[::-1]
     n_timesteps = x.shape[0]
     n_samples = x.shape[1]
+    n_timesteps_context = xc.shape[0]
+
+    context_emb = tparams['Wemb'][xc.flatten()]
+    context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
+
+    context_emb = context_emb.mean(0) # Will probably crash here for no context # FIXME
+    f_context_emb = get_layer('ff')[1](tparams, context_emb, options,
+                                    prefix='f_context_emb', activ='tanh')
+    r_context_emb = get_layer('ff')[1](tparams, context_emb, options,
+                                    prefix='r_context_emb', activ='tanh')
 
     # word embedding (source), forward and backward
     emb = tparams['Wemb'][x.flatten()]
@@ -674,9 +722,9 @@ def build_sampler(tparams, options, trng):
 
     # encoder
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
-                                            prefix='encoder')
+                                            prefix='encoder', init_state=f_context_emb)
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
-                                             prefix='encoder_r')
+                                             prefix='encoder_r', init_state=r_context_emb)
 
     # concatenate forward and backward rnn hidden states
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
@@ -689,7 +737,7 @@ def build_sampler(tparams, options, trng):
 
     print 'Building f_init...',
     outs = [init_state, ctx]
-    f_init = theano.function([x], outs, name='f_init', profile=profile)
+    f_init = theano.function([x, xc], outs, name='f_init', profile=profile)
     print 'Done'
 
     # x: 1 x 1
@@ -742,7 +790,7 @@ def build_sampler(tparams, options, trng):
 
 # generate sample, either with stochastic sampling or beam search. Note that,
 # this function iteratively calls f_init and f_next functions.
-def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
+def gen_sample(tparams, f_init, f_next, x, xc, options, trng=None, k=1, maxlen=30,
                stochastic=True, argmax=False):
 
     # k is the beam size we have
@@ -763,7 +811,7 @@ def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
     hyp_states = []
 
     # get initial state of decoder rnn and encoder context
-    ret = f_init(x)
+    ret = f_init(x, xc)
     next_state, ctx0 = ret[0], ret[1]
     next_w = -1 * numpy.ones((1,)).astype('int64')  # bos indicator
 
@@ -844,14 +892,14 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
 
     n_done = 0
 
-    for x, y in iterator:
+    for x, y, xc in iterator:
         n_done += len(x)
 
-        x, x_mask, y, y_mask = prepare_data(x, y,
+        x, x_mask, y, y_mask, xc, xc_mask = prepare_data(x, y, xc,
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'])
 
-        pprobs = f_log_probs(x, x_mask, y, y_mask)
+        pprobs = f_log_probs(x, x_mask, y, y_mask, xc, xc_mask)
         for pp in pprobs:
             probs.append(pp)
 
@@ -994,7 +1042,7 @@ def train(dim_word=100,  # word vector dimensionality
           dispFreq=100,
           decay_c=0.,  # L2 regularization penalty
           alpha_c=0.,  # alignment regularization
-          clip_c=-1.,  # gradient clipping threshold
+          clip_c=1.,  # gradient clipping threshold
           lrate=0.01,  # learning rate
           n_words_src=100000,  # source vocabulary size
           n_words=100000,  # target vocabulary size
@@ -1036,12 +1084,12 @@ def train(dim_word=100,  # word vector dimensionality
             models_options = pkl.load(f)
 
     print 'Loading data'
-    train = TextIterator(datasets[0], datasets[1],
+    train = TextIterator(datasets[0], datasets[1], datasets[2],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=batch_size,
                          maxlen=maxlen)
-    valid = TextIterator(valid_datasets[0], valid_datasets[1],
+    valid = TextIterator(valid_datasets[0], valid_datasets[1], valid_datasets[2],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=valid_batch_size,
@@ -1056,13 +1104,13 @@ def train(dim_word=100,  # word vector dimensionality
     tparams = init_tparams(params)
 
     trng, use_noise, \
-        x, x_mask, y, y_mask, \
+        x, x_mask, y, y_mask, xc, xc_mask, \
         opt_ret, \
         cost = \
         build_model(tparams, model_options)
-    inps = [x, x_mask, y, y_mask]
+    inps = [x, x_mask, y, y_mask, xc, xc_mask]
 
-    print 'Buliding sampler'
+    print 'Building sampler'
     f_init, f_next = build_sampler(tparams, model_options, trng)
 
     # before any regularizer
@@ -1137,12 +1185,12 @@ def train(dim_word=100,  # word vector dimensionality
     for eidx in xrange(max_epochs):
         n_samples = 0
 
-        for x, y in train:
+        for x, y, xc in train:
             n_samples += len(x)
             uidx += 1
             use_noise.set_value(1.)
 
-            x, x_mask, y, y_mask = prepare_data(x, y, maxlen=maxlen,
+            x, x_mask, y, y_mask, xc, xc_mask = prepare_data(x, y, xc, maxlen=maxlen,
                                                 n_words_src=n_words_src,
                                                 n_words=n_words)
 
@@ -1154,7 +1202,7 @@ def train(dim_word=100,  # word vector dimensionality
             ud_start = time.time()
 
             # compute cost, grads and copy grads to shared variables
-            cost = f_grad_shared(x, x_mask, y, y_mask)
+            cost = f_grad_shared(x, x_mask, y, y_mask, xc, xc_mask)
 
             # do the update on parameters
             f_update(lrate)
@@ -1189,11 +1237,11 @@ def train(dim_word=100,  # word vector dimensionality
                 for jj in xrange(numpy.minimum(5, x.shape[1])):
                     stochastic = True
                     sample, score = gen_sample(tparams, f_init, f_next,
-                                               x[:, jj][:, None],
+                                               x[:, jj][:, None], xc[:, jj][:, None],
                                                model_options, trng=trng, k=1,
                                                maxlen=30,
                                                stochastic=stochastic,
-                                               argmax=False)
+                                               argmax=False) # Should I truncate to actual length here? # FIXME?
                     print 'Source ', jj, ': ',
                     for vv in x[:, jj]:
                         if vv == 0:

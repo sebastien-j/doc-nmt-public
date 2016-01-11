@@ -12,7 +12,7 @@ def fopen(filename, mode='r'):
 
 class TextIterator:
     """Simple Bitext iterator."""
-    def __init__(self, source, target,
+    def __init__(self, source, target, source_context,
                  source_dict, target_dict,
                  batch_size=128,
                  maxlen=100,
@@ -20,6 +20,8 @@ class TextIterator:
                  n_words_target=-1):
         self.source = fopen(source, 'r')
         self.target = fopen(target, 'r')
+        self.source_context = fopen(source_context, 'r')
+
         with open(source_dict, 'rb') as f:
             self.source_dict = pkl.load(f)
         with open(target_dict, 'rb') as f:
@@ -33,6 +35,7 @@ class TextIterator:
 
         self.source_buffer = []
         self.target_buffer = []
+        self.source_context_buffer = []
         self.k = batch_size * 20
 
         self.end_of_data = False
@@ -43,6 +46,7 @@ class TextIterator:
     def reset(self):
         self.source.seek(0)
         self.target.seek(0)
+        self.source_context.seek(0)
 
     def next(self):
         if self.end_of_data:
@@ -52,9 +56,10 @@ class TextIterator:
 
         source = []
         target = []
+        source_context = []
 
         # fill buffer, if it's empty
-        assert len(self.source_buffer) == len(self.target_buffer), 'Buffer size mismatch!'
+        assert len(self.source_buffer) == len(self.target_buffer) == len(self.source_context_buffer), 'Buffer size mismatch!'
 
         if len(self.source_buffer) == 0:
             for k_ in xrange(self.k):
@@ -64,9 +69,13 @@ class TextIterator:
                 tt = self.target.readline()
                 if tt == "":
                     break
+                cc = self.source_context.readline()
+                if cc == "":
+                    break
 
                 self.source_buffer.append(ss.strip().split())
                 self.target_buffer.append(tt.strip().split())
+                self.source_context_buffer.append(cc.strip().split())
 
             # sort by target buffer
             tlen = numpy.array([len(t) for t in self.target_buffer])
@@ -74,11 +83,13 @@ class TextIterator:
 
             _sbuf = [self.source_buffer[i] for i in tidx]
             _tbuf = [self.target_buffer[i] for i in tidx]
-
+            _cbuf = [self.source_context_buffer[i] for i in tidx]
+            
             self.source_buffer = _sbuf
             self.target_buffer = _tbuf
+            self.source_context_buffer = _cbuf
 
-        if len(self.source_buffer) == 0 or len(self.target_buffer) == 0:
+        if len(self.source_buffer) == 0 or len(self.target_buffer) == 0 or len(self.source_context_buffer) == 0:
             self.end_of_data = False
             self.reset()
             raise StopIteration
@@ -104,12 +115,20 @@ class TextIterator:
                       for w in tt]
                 if self.n_words_target > 0:
                     tt = [w if w < self.n_words_target else 1 for w in tt]
+                
+                # read from source context file and map to word index
+                cc = self.source_context_buffer.pop()
+                cc = [self.source_dict[w] if w in self.source_dict else 1
+                      for w in cc]
+                if self.n_words_source > 0:
+                    cc = [w if w < self.n_words_source else 1 for w in cc]
 
                 if len(ss) > self.maxlen and len(tt) > self.maxlen:
                     continue
 
                 source.append(ss)
                 target.append(tt)
+                source_context.append(cc)
 
                 if len(source) >= self.batch_size or \
                         len(target) >= self.batch_size:
@@ -122,4 +141,4 @@ class TextIterator:
             self.reset()
             raise StopIteration
 
-        return source, target
+        return source, target, source_context
