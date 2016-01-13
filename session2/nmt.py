@@ -387,7 +387,7 @@ def param_init_gru_cond(options, params, prefix='gru_cond',
     return params
 
 
-def gru_cond_layer(tparams, state_below, options, prefix='gru',
+def gru_cond_layer(tparams, state_below, options, prefix='gru_cond',
                    mask=None, context=None, one_step=False,
                    init_memory=None, init_state=None,
                    context_mask=None,
@@ -560,7 +560,7 @@ def param_init_gru_cond_legacy(options, params, prefix='gru_cond_legacy',
     return params
 
 
-def gru_cond_legacy_layer(tparams, state_below, options, prefix='gru',
+def gru_cond_legacy_layer(tparams, state_below, options, prefix='gru_cond_legacy',
                    mask=None, context=None, one_step=False, init_state=None,
                    context_mask=None, **kwargs):
 
