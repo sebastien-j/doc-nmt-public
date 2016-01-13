@@ -27,10 +27,11 @@ def translate_model(queue, rqueue, pid, model, options, k, normalize):
     # word index
     f_init, f_next = build_sampler(tparams, options, trng)
 
-    def _translate(seq):
+    def _translate(seq, seq_context):
         # sample given an input sequence and obtain scores
         sample, score = gen_sample(tparams, f_init, f_next,
                                    numpy.array(seq).reshape([len(seq), 1]),
+                                   numpy.array(seq_context).reshape([len(seq_context), 1]),
                                    options, trng=trng, k=k, maxlen=200,
                                    stochastic=False, argmax=False)
 
@@ -46,16 +47,16 @@ def translate_model(queue, rqueue, pid, model, options, k, normalize):
         if req is None:
             break
 
-        idx, x = req[0], req[1]
+        idx, x, xc = req[0], req[1], req[2]
         print pid, '-', idx
-        seq = _translate(x)
+        seq = _translate(x, xc)
 
         rqueue.put((idx, seq))
 
     return
 
 
-def main(model, dictionary, dictionary_target, source_file, saveto, k=5,
+def main(model, dictionary, dictionary_target, source_file, source_context_file, saveto, k=5,
          normalize=False, n_process=5, chr_level=False):
 
     # load model model_options
@@ -102,17 +103,28 @@ def main(model, dictionary, dictionary_target, source_file, saveto, k=5,
             capsw.append(' '.join(ww))
         return capsw
 
-    def _send_jobs(fname):
+    def _send_jobs(fname, gname):
         with open(fname, 'r') as f:
-            for idx, line in enumerate(f):
-                if chr_level:
-                    words = list(line.decode('utf-8').strip())
-                else:
-                    words = line.strip().split()
-                x = map(lambda w: word_dict[w] if w in word_dict else 1, words)
-                x = map(lambda ii: ii if ii < options['n_words_src'] else 1, x)
-                x += [0]
-                queue.put((idx, x))
+            with open(gname, 'r') as g:
+                for idx, line in enumerate(f):
+                    if chr_level:
+                        words = list(line.decode('utf-8').strip())
+                    else:
+                        words = line.strip().split()
+                    x = map(lambda w: word_dict[w] if w in word_dict else 1, words)
+                    x = map(lambda ii: ii if ii < options['n_words_src'] else 1, x)
+                    x += [0]
+
+                    gline = g.readline()
+                    if chr_level:
+                        context_words = list(gline.decode('utf-8').strip())
+                    else:
+                        context_words = gline.strip().split()
+                    xc = map(lambda w: word_dict[w] if w in word_dict else 1, context_words)
+                    xc = map(lambda ii: ii if ii < options['n_words_src'] else 1, xc)
+                    xc += [0]
+                        
+                    queue.put((idx, x, xc))
         return idx+1
 
     def _finish_processes():
@@ -128,8 +140,8 @@ def main(model, dictionary, dictionary_target, source_file, saveto, k=5,
                 print 'Sample ', (idx+1), '/', n_samples, ' Done'
         return trans
 
-    print 'Translating ', source_file, '...'
-    n_samples = _send_jobs(source_file)
+    print 'Translating ', source_file, 'with context from', source_context_file, '...'
+    n_samples = _send_jobs(source_file, source_context_file)
     trans = _seqs2words(_retrieve_jobs(n_samples))
     _finish_processes()
     with open(saveto, 'w') as f:
@@ -147,10 +159,11 @@ if __name__ == "__main__":
     parser.add_argument('dictionary', type=str)
     parser.add_argument('dictionary_target', type=str)
     parser.add_argument('source', type=str)
+    parser.add_argument('source_context', type=str)
     parser.add_argument('saveto', type=str)
 
     args = parser.parse_args()
 
-    main(args.model, args.dictionary, args.dictionary_target, args.source,
+    main(args.model, args.dictionary, args.dictionary_target, args.source, args.source_context,
          args.saveto, k=args.k, normalize=args.n, n_process=args.p,
          chr_level=args.c)
