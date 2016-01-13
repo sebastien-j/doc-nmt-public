@@ -1233,7 +1233,8 @@ def train(rng=123,
               '/data/lisatmp3/chokyun/europarl/europarl-v7.fr-en.en.tok.pkl',
               '/data/lisatmp3/chokyun/europarl/europarl-v7.fr-en.fr.tok.pkl'],
           use_dropout=False,
-          reload_=False):
+          reload_=False,
+          save_inter=False):
 
     # Model options
     model_options = locals().copy()
@@ -1399,6 +1400,12 @@ def train(rng=123,
                     params = unzip(tparams)
                 numpy.savez(saveto, history_errs=history_errs, **params)
                 pkl.dump(model_options, open('%s.pkl' % saveto, 'wb'))
+
+                cur_saveto = saveto[:-3]+str(uidx)+".npz"
+                print cur_saveto,
+                cur_params = unzip(tparams)
+                numpy.savez(cur_saveto, history_errs=history_errs, **cur_params)
+                pkl.dump(model_options, open('%s.pkl' % cur_saveto, 'wb'))
                 print 'Done'
 
             # generate some samples with the model and display them

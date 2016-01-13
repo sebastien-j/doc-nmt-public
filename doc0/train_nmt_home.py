@@ -32,7 +32,10 @@ def main(job_id, params):
                      dictionaries=['/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.pkl', 
                                    '/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.pkl'],
                      use_dropout=params['use-dropout'][0],
-                     decoder='gru_cond')
+                     decoder='gru_cond',
+                     rng=1234,
+                     trng=1234,
+                     save_inter=True)
     return validerr
 
 if __name__ == '__main__':
