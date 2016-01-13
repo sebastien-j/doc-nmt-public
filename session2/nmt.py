@@ -89,19 +89,19 @@ def get_layer(name):
 
 
 # some utilities
-def ortho_weight(ndim):
-    W = numpy.random.randn(ndim, ndim)
+def ortho_weight(ndim, rng=None):
+    W = rng.randn(ndim, ndim)
     u, s, v = numpy.linalg.svd(W)
     return u.astype('float32')
 
 
-def norm_weight(nin, nout=None, scale=0.01, ortho=True):
+def norm_weight(nin, nout=None, scale=0.01, ortho=True, rng=None):
     if nout is None:
         nout = nin
     if nout == nin and ortho:
-        W = ortho_weight(nin)
+        W = ortho_weight(nin, rng=rng)
     else:
-        W = scale * numpy.random.randn(nin, nout)
+        W = scale * rng.randn(nin, nout)
     return W.astype('float32')
 
 
@@ -203,12 +203,12 @@ def prepare_data(seqs_x, seqs_y, maxlen=None, n_words_src=30000,
 
 # feedforward layer: affine transformation + point-wise nonlinearity
 def param_init_fflayer(options, params, prefix='ff', nin=None, nout=None,
-                       ortho=True):
+                       ortho=True, rng=None):
     if nin is None:
         nin = options['dim_proj']
     if nout is None:
         nout = options['dim_proj']
-    params[_p(prefix, 'W')] = norm_weight(nin, nout, scale=0.01, ortho=ortho)
+    params[_p(prefix, 'W')] = norm_weight(nin, nout, scale=0.01, ortho=ortho, rng=rng)
     params[_p(prefix, 'b')] = numpy.zeros((nout,)).astype('float32')
 
     return params
@@ -222,30 +222,30 @@ def fflayer(tparams, state_below, options, prefix='rconv',
 
 
 # GRU layer
-def param_init_gru(options, params, prefix='gru', nin=None, dim=None):
+def param_init_gru(options, params, prefix='gru', nin=None, dim=None, rng=None):
     if nin is None:
         nin = options['dim_proj']
     if dim is None:
         dim = options['dim_proj']
 
     # embedding to gates transformation weights, biases
-    W = numpy.concatenate([norm_weight(nin, dim),
-                           norm_weight(nin, dim)], axis=1)
+    W = numpy.concatenate([norm_weight(nin, dim, rng=rng),
+                           norm_weight(nin, dim, rng=rng)], axis=1)
     params[_p(prefix, 'W')] = W
     params[_p(prefix, 'b')] = numpy.zeros((2 * dim,)).astype('float32')
 
     # recurrent transformation weights for gates
-    U = numpy.concatenate([ortho_weight(dim),
-                           ortho_weight(dim)], axis=1)
+    U = numpy.concatenate([ortho_weight(dim, rng=rng),
+                           ortho_weight(dim, rng=rng)], axis=1)
     params[_p(prefix, 'U')] = U
 
     # embedding to hidden state proposal weights, biases
-    Wx = norm_weight(nin, dim)
+    Wx = norm_weight(nin, dim, rng=rng)
     params[_p(prefix, 'Wx')] = Wx
     params[_p(prefix, 'bx')] = numpy.zeros((dim,)).astype('float32')
 
     # recurrent transformation weights for hidden state proposal
-    Ux = ortho_weight(dim)
+    Ux = ortho_weight(dim, rng=rng)
     params[_p(prefix, 'Ux')] = Ux
 
     return params
@@ -324,7 +324,7 @@ def gru_layer(tparams, state_below, options, prefix='gru', mask=None,
 # Conditional GRU layer with Attention
 def param_init_gru_cond(options, params, prefix='gru_cond',
                         nin=None, dim=None, dimctx=None,
-                        nin_nonlin=None, dim_nonlin=None):
+                        nin_nonlin=None, dim_nonlin=None, rng=None):
     if nin is None:
         nin = options['dim']
     if dim is None:
@@ -336,42 +336,42 @@ def param_init_gru_cond(options, params, prefix='gru_cond',
     if dim_nonlin is None:
         dim_nonlin = dim
 
-    W = numpy.concatenate([norm_weight(nin, dim),
-                           norm_weight(nin, dim)], axis=1)
+    W = numpy.concatenate([norm_weight(nin, dim, rng=rng),
+                           norm_weight(nin, dim, rng=rng)], axis=1)
     params[_p(prefix, 'W')] = W
     params[_p(prefix, 'b')] = numpy.zeros((2 * dim,)).astype('float32')
-    U = numpy.concatenate([ortho_weight(dim_nonlin),
-                           ortho_weight(dim_nonlin)], axis=1)
+    U = numpy.concatenate([ortho_weight(dim_nonlin, rng=rng),
+                           ortho_weight(dim_nonlin, rng=rng)], axis=1)
     params[_p(prefix, 'U')] = U
 
-    Wx = norm_weight(nin_nonlin, dim_nonlin)
+    Wx = norm_weight(nin_nonlin, dim_nonlin, rng=rng)
     params[_p(prefix, 'Wx')] = Wx
-    Ux = ortho_weight(dim_nonlin)
+    Ux = ortho_weight(dim_nonlin, rng=rng)
     params[_p(prefix, 'Ux')] = Ux
     params[_p(prefix, 'bx')] = numpy.zeros((dim_nonlin,)).astype('float32')
 
-    U_nl = numpy.concatenate([ortho_weight(dim_nonlin),
-                              ortho_weight(dim_nonlin)], axis=1)
+    U_nl = numpy.concatenate([ortho_weight(dim_nonlin, rng=rng),
+                              ortho_weight(dim_nonlin, rng=rng)], axis=1)
     params[_p(prefix, 'U_nl')] = U_nl
     params[_p(prefix, 'b_nl')] = numpy.zeros((2 * dim_nonlin,)).astype('float32')
 
-    Ux_nl = ortho_weight(dim_nonlin)
+    Ux_nl = ortho_weight(dim_nonlin, rng=rng)
     params[_p(prefix, 'Ux_nl')] = Ux_nl
     params[_p(prefix, 'bx_nl')] = numpy.zeros((dim_nonlin,)).astype('float32')
 
     # context to LSTM
-    Wc = norm_weight(dimctx, dim*2)
+    Wc = norm_weight(dimctx, dim*2, rng=rng)
     params[_p(prefix, 'Wc')] = Wc
 
-    Wcx = norm_weight(dimctx, dim)
+    Wcx = norm_weight(dimctx, dim, rng=rng)
     params[_p(prefix, 'Wcx')] = Wcx
 
     # attention: combined -> hidden
-    W_comb_att = norm_weight(dim, dimctx)
+    W_comb_att = norm_weight(dim, dimctx, rng=rng)
     params[_p(prefix, 'W_comb_att')] = W_comb_att
 
     # attention: context -> hidden
-    Wc_att = norm_weight(dimctx)
+    Wc_att = norm_weight(dimctx, rng=rng)
     params[_p(prefix, 'Wc_att')] = Wc_att
 
     # attention: hidden bias
@@ -379,7 +379,7 @@ def param_init_gru_cond(options, params, prefix='gru_cond',
     params[_p(prefix, 'b_att')] = b_att
 
     # attention:
-    U_att = norm_weight(dimctx, 1)
+    U_att = norm_weight(dimctx, 1, rng=rng)
     params[_p(prefix, 'U_att')] = U_att
     c_att = numpy.zeros((1,)).astype('float32')
     params[_p(prefix, 'c_tt')] = c_att
@@ -518,7 +518,7 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
 
 # Conditional GRU layer with Attention
 def param_init_gru_cond_legacy(options, params, prefix='gru_cond_legacy',
-                        nin=None, dim=None, dimctx=None):
+                        nin=None, dim=None, dimctx=None, rng=None):
     if nin is None:
         nin = options['dim']
     if dim is None:
@@ -526,25 +526,25 @@ def param_init_gru_cond_legacy(options, params, prefix='gru_cond_legacy',
     if dimctx is None:
         dimctx = options['dim']
 
-    params = param_init_gru(options, params, prefix, nin=nin, dim=dim)
+    params = param_init_gru(options, params, prefix, nin=nin, dim=dim, rng=rng)
 
     # context to LSTM
-    Wc = norm_weight(dimctx, dim*2)
+    Wc = norm_weight(dimctx, dim*2, rng=rng)
     params[_p(prefix, 'Wc')] = Wc
 
-    Wcx = norm_weight(dimctx, dim)
+    Wcx = norm_weight(dimctx, dim, rng=rng)
     params[_p(prefix, 'Wcx')] = Wcx
 
     # attention: prev -> hidden
-    Wi_att = norm_weight(nin, dimctx)
+    Wi_att = norm_weight(nin, dimctx, rng=rng)
     params[_p(prefix, 'Wi_att')] = Wi_att
 
     # attention: context -> hidden
-    Wc_att = norm_weight(dimctx)
+    Wc_att = norm_weight(dimctx, rng=rng)
     params[_p(prefix, 'Wc_att')] = Wc_att
 
     # attention: LSTM -> hidden
-    Wd_att = norm_weight(dim, dimctx)
+    Wd_att = norm_weight(dim, dimctx, rng=rng)
     params[_p(prefix, 'Wd_att')] = Wd_att
 
     # attention: hidden bias
@@ -552,7 +552,7 @@ def param_init_gru_cond_legacy(options, params, prefix='gru_cond_legacy',
     params[_p(prefix, 'b_att')] = b_att
 
     # attention:
-    U_att = norm_weight(dimctx, 1)
+    U_att = norm_weight(dimctx, 1, rng=rng)
     params[_p(prefix, 'U_att')] = U_att
     c_att = numpy.zeros((1,)).astype('float32')
     params[_p(prefix, 'c_tt')] = c_att
@@ -688,43 +688,45 @@ def gru_cond_legacy_layer(tparams, state_below, options, prefix='gru',
 def init_params(options):
     params = OrderedDict()
 
+    rng = numpy.random.RandomState(options['rng'])
+
     # embedding
-    params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word'])
-    params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word'])
+    params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
+    params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word'], rng=rng)
 
     # encoder: bidirectional RNN
     params = get_layer(options['encoder'])[0](options, params,
                                               prefix='encoder',
                                               nin=options['dim_word'],
-                                              dim=options['dim'])
+                                              dim=options['dim'], rng=rng)
     params = get_layer(options['encoder'])[0](options, params,
                                               prefix='encoder_r',
                                               nin=options['dim_word'],
-                                              dim=options['dim'])
+                                              dim=options['dim'], rng=rng)
     ctxdim = 2 * options['dim']
 
     # init_state, init_cell
     params = get_layer('ff')[0](options, params, prefix='ff_state',
-                                nin=ctxdim, nout=options['dim'])
+                                nin=ctxdim, nout=options['dim'], rng=rng)
     # decoder
     params = get_layer(options['decoder'])[0](options, params,
                                               prefix='decoder',
                                               nin=options['dim_word'],
                                               dim=options['dim'],
-                                              dimctx=ctxdim)
+                                              dimctx=ctxdim, rng=rng)
     # readout
     params = get_layer('ff')[0](options, params, prefix='ff_logit_lstm',
                                 nin=options['dim'], nout=options['dim_word'],
-                                ortho=False)
+                                ortho=False, rng=rng)
     params = get_layer('ff')[0](options, params, prefix='ff_logit_prev',
                                 nin=options['dim_word'],
-                                nout=options['dim_word'], ortho=False)
+                                nout=options['dim_word'], ortho=False, rng=rng)
     params = get_layer('ff')[0](options, params, prefix='ff_logit_ctx',
                                 nin=ctxdim, nout=options['dim_word'],
-                                ortho=False)
+                                ortho=False, rng=rng)
     params = get_layer('ff')[0](options, params, prefix='ff_logit',
                                 nin=options['dim_word'],
-                                nout=options['n_words'])
+                                nout=options['n_words'], rng=rng)
 
     return params
 
@@ -733,7 +735,7 @@ def init_params(options):
 def build_model(tparams, options):
     opt_ret = dict()
 
-    trng = RandomStreams(1234)
+    trng = RandomStreams(options['trng'])
     use_noise = theano.shared(numpy.float32(0.))
 
     # description string: #words x #samples
@@ -1153,7 +1155,9 @@ def sgd(lr, tparams, grads, x, mask, y, cost):
     return f_grad_shared, f_update
 
 
-def train(dim_word=100,  # word vector dimensionality
+def train(rng=123,
+          trng=1234,
+          dim_word=100,  # word vector dimensionality
           dim=1000,  # the number of LSTM units
           encoder='gru',
           decoder='gru_cond',

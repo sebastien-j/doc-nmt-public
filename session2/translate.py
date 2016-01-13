@@ -15,7 +15,7 @@ from multiprocessing import Process, Queue
 def translate_model(queue, rqueue, pid, model, options, k, normalize):
 
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-    trng = RandomStreams(1234)
+    trng = RandomStreams(options['trng'])
 
     # allocate model parameters
     params = init_params(options)
