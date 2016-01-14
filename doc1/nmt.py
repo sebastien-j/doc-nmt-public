@@ -79,7 +79,8 @@ def load_params(path, params):
 layers = {'ff': ('param_init_fflayer', 'fflayer'),
           'gru': ('param_init_gru', 'gru_layer'),
           'gru_cond': ('param_init_gru_cond', 'gru_cond_layer'),
-          'gru_cond_legacy': ('param_init_gru_cond_legacy', 'gru_cond_legacy_layer')
+          'gru_cond_legacy': ('param_init_gru_cond_legacy', 'gru_cond_legacy_layer'),
+          'gru_simple_sc': ('param_init_gru_simple_sc', 'gru_simple_sc_layer')
           }
 
 
@@ -689,6 +690,117 @@ def gru_cond_legacy_layer(tparams, state_below, options, prefix='gru_cond_legacy
             strict=True)
     return rval
 
+# GRU layer
+def param_init_gru_simple_sc(options, params, prefix='gru_simple_sc', nin=None, dim=None, rng=None):
+    if nin is None:
+        nin = options['dim_proj']
+    if dim is None:
+        dim = options['dim_proj']
+
+    # embedding to gates transformation weights, biases
+    W = numpy.concatenate([norm_weight(nin, dim, rng=rng),
+                           norm_weight(nin, dim, rng=rng)], axis=1)
+    params[_p(prefix, 'W')] = W
+    params[_p(prefix, 'b')] = numpy.zeros((2 * dim,)).astype('float32')
+
+    # recurrent transformation weights for gates
+    U = numpy.concatenate([ortho_weight(dim, rng=rng),
+                           ortho_weight(dim, rng=rng)], axis=1)
+    params[_p(prefix, 'U')] = U
+
+    # embedding to hidden state proposal weights, biases
+    Wx = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Wx')] = Wx
+    params[_p(prefix, 'bx')] = numpy.zeros((dim,)).astype('float32')
+
+    # recurrent transformation weights for hidden state proposal
+    Ux = ortho_weight(dim, rng=rng)
+    params[_p(prefix, 'Ux')] = Ux
+
+    Wsc = numpy.concatenate([norm_weight(nin, dim, rng=rng),
+                             norm_weight(nin, dim, rng=rng)], axis=1)
+    params[_p(prefix, 'Wsc')] = Wsc
+
+    Wscx = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Wscx')] = Wscx
+
+    return params
+
+
+def gru_simple_sc_layer(tparams, state_below, options, prefix='gru_simple_sc', mask=None,
+              init_state=None, **kwargs):
+    nsteps = state_below.shape[0]
+    if state_below.ndim == 3:
+        n_samples = state_below.shape[1]
+    else:
+        n_samples = 1
+
+    assert 'sc' in kwargs # sc: n_samples x dim_sc
+
+    dim = tparams[_p(prefix, 'Ux')].shape[1]
+
+    if mask is None:
+        mask = tensor.alloc(1., state_below.shape[0], 1)
+
+    # utility function to slice a tensor
+    def _slice(_x, n, dim):
+        if _x.ndim == 3:
+            return _x[:, :, n*dim:(n+1)*dim]
+        return _x[:, n*dim:(n+1)*dim]
+
+    # state_below is the input word embeddings
+    # input to the gates, concatenated
+    state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + \
+        tparams[_p(prefix, 'b')] + \
+        tensor.dot(kwargs['sc'], tparams[_p(prefix, 'Wsc')]) # Will be broadcasted over # of steps
+    # input to compute the hidden state proposal
+    state_belowx = tensor.dot(state_below, tparams[_p(prefix, 'Wx')]) + \
+        tparams[_p(prefix, 'bx')] + \
+        tensor.dot(kwargs['sc'], tparams[_p(prefix, 'Wscx')])
+
+    # step function to be used by scan
+    # arguments    | sequences |outputs-info| non-seqs
+    def _step_slice(m_, x_, xx_, h_, U, Ux):
+        preact = tensor.dot(h_, U)
+        preact += x_
+
+        # reset and update gates
+        r = tensor.nnet.sigmoid(_slice(preact, 0, dim))
+        u = tensor.nnet.sigmoid(_slice(preact, 1, dim))
+
+        # compute the hidden state proposal
+        preactx = tensor.dot(h_, Ux)
+        preactx = preactx * r
+        preactx = preactx + xx_
+
+        # hidden state proposal
+        h = tensor.tanh(preactx)
+
+        # leaky integrate and obtain next hidden state
+        h = u * h_ + (1. - u) * h
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
+
+        return h
+
+    # prepare scan arguments
+    seqs = [mask, state_below_, state_belowx]
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
+    _step = _step_slice
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Ux')]]
+
+    rval, updates = theano.scan(_step,
+                                sequences=seqs,
+                                outputs_info=init_state,
+                                non_sequences=shared_vars,
+                                name=_p(prefix, '_layers'),
+                                n_steps=nsteps,
+                                profile=profile,
+                                strict=True)
+    rval = [rval]
+    return rval
+
 # initialize all parameters
 def init_params(options):
     params = OrderedDict()
@@ -784,14 +896,16 @@ def build_model(tparams, options):
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder',
                                             mask=x_mask,
-                                            init_state=f_context_emb)
+                                            init_state=f_context_emb,
+                                            sc=context_emb)
     # word embedding for backward rnn (source)
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
                                              prefix='encoder_r',
                                              mask=xr_mask,
-                                             init_state=r_context_emb)
+                                             init_state=r_context_emb,
+                                             sc=context_emb)
 
     # context will be the concatenation of forward and backward rnns
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
@@ -885,9 +999,11 @@ def build_sampler(tparams, options, trng):
 
     # encoder
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
-                                            prefix='encoder', init_state=f_context_emb)
+                                            prefix='encoder', init_state=f_context_emb,
+                                            sc=context_emb)
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
-                                             prefix='encoder_r', init_state=r_context_emb)
+                                             prefix='encoder_r', init_state=r_context_emb,
+                                             sc=context_emb)
 
     # concatenate forward and backward rnn hidden states
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
@@ -1229,7 +1345,8 @@ def train(rng=123,
               '/data/lisatmp3/chokyun/europarl/europarl-v7.fr-en.fr.tok.pkl'],
           use_dropout=False,
           reload_=False,
-          save_inter=False):
+          save_inter=False,
+          **kwargs):
 
     # Model options
     model_options = locals().copy()

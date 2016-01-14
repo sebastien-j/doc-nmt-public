@@ -35,14 +35,15 @@ def main(job_id, params):
                      decoder='gru_cond',
                      rng=1234,
                      trng=1234,
-                     save_inter=True)
+                     save_inter=True,
+                     encoder='gru_simple_sc')
     return validerr
 
 if __name__ == '__main__':
     main(0, {
         'model': ['/home/sebastien/Documents/WIT3/en-fr/models/debug_model.npz'],
-        'dim_word': [100],
-        'dim': [200],
+        'dim_word': [107],
+        'dim': [253],
         'n-words': [10000], 
         'optimizer': ['adadelta'],
         'decay-c': [0.], 
