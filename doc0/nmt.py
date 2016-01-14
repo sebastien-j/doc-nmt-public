@@ -334,41 +334,36 @@ def gru_layer(tparams, state_below, options, prefix='gru', mask=None,
 
 # Conditional GRU layer with Attention
 def param_init_gru_cond(options, params, prefix='gru_cond',
-                        nin=None, dim=None, dimctx=None,
-                        nin_nonlin=None, dim_nonlin=None, rng=None):
+                        nin=None, dim=None, dimctx=None, rng=None):
     if nin is None:
         nin = options['dim']
     if dim is None:
         dim = options['dim']
     if dimctx is None:
         dimctx = options['dim']
-    if nin_nonlin is None:
-        nin_nonlin = nin
-    if dim_nonlin is None:
-        dim_nonlin = dim
 
     W = numpy.concatenate([norm_weight(nin, dim, rng=rng),
                            norm_weight(nin, dim, rng=rng)], axis=1)
     params[_p(prefix, 'W')] = W
     params[_p(prefix, 'b')] = numpy.zeros((2 * dim,)).astype('float32')
-    U = numpy.concatenate([ortho_weight(dim_nonlin, rng=rng),
-                           ortho_weight(dim_nonlin, rng=rng)], axis=1)
+    U = numpy.concatenate([ortho_weight(dim, rng=rng),
+                           ortho_weight(dim, rng=rng)], axis=1)
     params[_p(prefix, 'U')] = U
 
-    Wx = norm_weight(nin_nonlin, dim_nonlin, rng=rng)
+    Wx = norm_weight(nin, dim, rng=rng)
     params[_p(prefix, 'Wx')] = Wx
-    Ux = ortho_weight(dim_nonlin, rng=rng)
+    Ux = ortho_weight(dim, rng=rng)
     params[_p(prefix, 'Ux')] = Ux
-    params[_p(prefix, 'bx')] = numpy.zeros((dim_nonlin,)).astype('float32')
+    params[_p(prefix, 'bx')] = numpy.zeros((dim,)).astype('float32')
 
-    U_nl = numpy.concatenate([ortho_weight(dim_nonlin, rng=rng),
-                              ortho_weight(dim_nonlin, rng=rng)], axis=1)
+    U_nl = numpy.concatenate([ortho_weight(dim, rng=rng),
+                              ortho_weight(dim, rng=rng)], axis=1)
     params[_p(prefix, 'U_nl')] = U_nl
-    params[_p(prefix, 'b_nl')] = numpy.zeros((2 * dim_nonlin,)).astype('float32')
+    params[_p(prefix, 'b_nl')] = numpy.zeros((2 * dim,)).astype('float32')
 
-    Ux_nl = ortho_weight(dim_nonlin, rng=rng)
+    Ux_nl = ortho_weight(dim, rng=rng)
     params[_p(prefix, 'Ux_nl')] = Ux_nl
-    params[_p(prefix, 'bx_nl')] = numpy.zeros((dim_nonlin,)).astype('float32')
+    params[_p(prefix, 'bx_nl')] = numpy.zeros((dim,)).astype('float32')
 
     # context to LSTM
     Wc = norm_weight(dimctx, dim*2, rng=rng)
