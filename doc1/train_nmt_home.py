@@ -21,7 +21,7 @@ def main(job_id, params):
                      valid_batch_size=32,
                      validFreq=1000,
                      dispFreq=10,
-                     saveFreq=5000,
+                     saveFreq=2000,
                      sampleFreq=200,
                      datasets=['/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.en.tok.text.bpe10000.first1000', 
                                '/home/sebastien/Documents/WIT3/en-fr/train.tags.en-fr.fr.tok.text.bpe10000.first1000',
@@ -36,14 +36,14 @@ def main(job_id, params):
                      rng=1234,
                      trng=1234,
                      save_inter=True,
-                     encoder='gru_simple_sc')
+                     encoder='lstm')
     return validerr
 
 if __name__ == '__main__':
     main(0, {
         'model': ['/home/sebastien/Documents/WIT3/en-fr/models/debug_model.npz'],
-        'dim_word': [107],
-        'dim': [253],
+        'dim_word': [100],
+        'dim': [200],
         'n-words': [10000], 
         'optimizer': ['adadelta'],
         'decay-c': [0.], 
