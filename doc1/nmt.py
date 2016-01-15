@@ -832,7 +832,7 @@ def param_init_lstm(options, params, prefix='lstm', nin=None, dim=None, rng=None
     return params
 
 # This function implements the lstm fprop
-def lstm_layer(tparams, state_below, options, prefix='lstm', mask=None, init_state=None, **kwargs):
+def lstm_layer(tparams, state_below, options, prefix='lstm', mask=None, init_state=None, init_memory=None, **kwargs):
     nsteps = state_below.shape[0]
     dim = tparams[_p(prefix,'U')].shape[0]
 
@@ -840,7 +840,8 @@ def lstm_layer(tparams, state_below, options, prefix='lstm', mask=None, init_sta
     n_samples = state_below.shape[1]
     if init_state is None:
         init_state = tensor.alloc(0., n_samples, dim)
-    init_memory = tensor.alloc(0., n_samples, dim)
+    if init_memory is None:
+        init_memory = tensor.alloc(0., n_samples, dim)
 
     # if we have no mask, we assume all the inputs are valid
     if mask == None:
@@ -915,7 +916,7 @@ def param_init_lstm_simple_sc(options, params, prefix='lstm_simple_sc', nin=None
     return params
 
 # This function implements the lstm fprop
-def lstm_simple_sc_layer(tparams, state_below, options, prefix='lstm_simple_sc', mask=None, init_state=None, **kwargs):
+def lstm_simple_sc_layer(tparams, state_below, options, prefix='lstm_simple_sc', mask=None, init_state=None, init_memory=None, **kwargs):
     nsteps = state_below.shape[0]
     dim = tparams[_p(prefix,'U')].shape[0]
 
@@ -925,7 +926,8 @@ def lstm_simple_sc_layer(tparams, state_below, options, prefix='lstm_simple_sc',
     n_samples = state_below.shape[1]
     if init_state is None:
         init_state = tensor.alloc(0., n_samples, dim)
-    init_memory = tensor.alloc(0., n_samples, dim)
+    if init_memory is None:
+        init_memory = tensor.alloc(0., n_samples, dim)
 
     # if we have no mask, we assume all the inputs are valid
     if mask == None:
@@ -1004,7 +1006,7 @@ def param_init_lstm_late_sc(options, params, prefix='lstm_late_sc', nin=None, di
     return params
 
 # This function implements the lstm fprop
-def lstm_late_sc_layer(tparams, state_below, options, prefix='lstm_late_sc', mask=None, init_state=None, **kwargs):
+def lstm_late_sc_layer(tparams, state_below, options, prefix='lstm_late_sc', mask=None, init_state=None, init_memory=None, **kwargs):
     nsteps = state_below.shape[0]
     dim = tparams[_p(prefix,'U')].shape[0]
 
@@ -1014,7 +1016,8 @@ def lstm_late_sc_layer(tparams, state_below, options, prefix='lstm_late_sc', mas
     n_samples = state_below.shape[1]
     if init_state is None:
         init_state = tensor.alloc(0., n_samples, dim)
-    init_memory = tensor.alloc(0., n_samples, dim)
+    if init_memory is None:
+        init_memory = tensor.alloc(0., n_samples, dim)
 
     # if we have no mask, we assume all the inputs are valid
     if mask == None:
@@ -1077,6 +1080,14 @@ def init_params(options):
                                 nin=options['dim_word'], nout=options['dim'],
                                 ortho=False, rng=rng)
 
+    if options['encoder'].startswith('lstm'):
+        params = get_layer('ff')[0](options, params, prefix='f_init_memory',
+                                    nin=options['dim_word'], nout=options['dim'],
+                                    ortho=False, rng=rng)
+
+        params = get_layer('ff')[0](options, params, prefix='r_init_memory',
+                                    nin=options['dim_word'], nout=options['dim'],
+                                    ortho=False, rng=rng)
     # encoder: bidirectional RNN
     params = get_layer(options['encoder'])[0](options, params,
                                               prefix='encoder',
@@ -1148,13 +1159,23 @@ def build_model(tparams, options):
     r_context_emb = get_layer('ff')[1](tparams, context_emb, options,
                                     prefix='r_context_emb', activ='tanh')
 
+    f_init_memory = None
+    r_init_memory = None
+    if options['encoder'].startswith('lstm'):
+        f_init_memory = get_layer('ff')[1](tparams, context_emb, options,
+                        prefix='f_init_memory', activ='tanh')
+        r_init_memory = get_layer('ff')[1](tparams, context_emb, options,
+                prefix='r_init_memory', activ='tanh')
+
     # word embedding for forward rnn (source)
     emb = tparams['Wemb'][x.flatten()]
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word']])
+
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder',
                                             mask=x_mask,
                                             init_state=f_context_emb,
+                                            init_memory=f_init_memory,
                                             sc=context_emb)
     # word embedding for backward rnn (source)
     embr = tparams['Wemb'][xr.flatten()]
@@ -1163,6 +1184,7 @@ def build_model(tparams, options):
                                              prefix='encoder_r',
                                              mask=xr_mask,
                                              init_state=r_context_emb,
+                                             init_memory=r_init_memory,
                                              sc=context_emb)
 
     # context will be the concatenation of forward and backward rnns
@@ -1249,6 +1271,14 @@ def build_sampler(tparams, options, trng):
     r_context_emb = get_layer('ff')[1](tparams, context_emb, options,
                                     prefix='r_context_emb', activ='tanh')
 
+    f_init_memory = None
+    r_init_memory = None
+    if options['encoder'].startswith('lstm'):
+        f_init_memory = get_layer('ff')[1](tparams, context_emb, options,
+                        prefix='f_init_memory', activ='tanh')
+        r_init_memory = get_layer('ff')[1](tparams, context_emb, options,
+                        prefix='r_init_memory', activ='tanh')
+
     # word embedding (source), forward and backward
     emb = tparams['Wemb'][x.flatten()]
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word']])
@@ -1258,10 +1288,10 @@ def build_sampler(tparams, options, trng):
     # encoder
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder', init_state=f_context_emb,
-                                            sc=context_emb)
+                                            init_memory=f_init_memory, sc=context_emb)
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
                                              prefix='encoder_r', init_state=r_context_emb,
-                                             sc=context_emb)
+                                             init_memory=r_init_memory, sc=context_emb)
 
     # concatenate forward and backward rnn hidden states
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
