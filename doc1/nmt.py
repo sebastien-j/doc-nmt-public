@@ -1118,6 +1118,9 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_logit_ctx',
                                 nin=ctxdim, nout=options['dim_word'],
                                 ortho=False, rng=rng)
+    params = get_layer('ff')[0](options, params, prefix='ff_logit_sc',
+                                nin=options['dim_word'], nout=options['dim_word'],
+                                ortho=False, rng=rng)
     params = get_layer('ff')[0](options, params, prefix='ff_logit',
                                 nin=options['dim_word'],
                                 nout=options['n_words'], rng=rng)
@@ -1233,7 +1236,9 @@ def build_model(tparams, options):
                                     prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
-    logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx)
+    logit_sc = get_layer('ff')[1](tparams, context_emb, options,
+                                   prefix='ff_logit_sc', activ='linear')
+    logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
     if options['use_dropout']:
         logit = dropout_layer(logit, use_noise, trng)
     logit = get_layer('ff')[1](tparams, logit, options, 
@@ -1303,7 +1308,7 @@ def build_sampler(tparams, options, trng):
                                     prefix='ff_state', activ='tanh')
 
     print 'Building f_init...',
-    outs = [init_state, ctx]
+    outs = [init_state, ctx, context_emb]
     f_init = theano.function([x, xc], outs, name='f_init', profile=profile)
     print 'Done'
 
@@ -1334,7 +1339,12 @@ def build_sampler(tparams, options, trng):
                                     prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
-    logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx)
+    print logit_ctx.ndim
+    logit_sc = get_layer('ff')[1](tparams, context_emb, options,
+                                   prefix='ff_logit_sc', activ='linear')
+    print logit_sc.ndim
+    #ipdb.set_trace()
+    logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
     logit = get_layer('ff')[1](tparams, logit, options,
                                prefix='ff_logit', activ='linear')
 
@@ -1347,7 +1357,7 @@ def build_sampler(tparams, options, trng):
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
     print 'Building f_next..',
-    inps = [y, ctx, init_state]
+    inps = [y, ctx, init_state, context_emb]
     outs = [next_probs, next_sample, next_state]
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
     print 'Done'
@@ -1379,12 +1389,17 @@ def gen_sample(tparams, f_init, f_next, x, xc, options, trng=None, k=1, maxlen=3
 
     # get initial state of decoder rnn and encoder context
     ret = f_init(x, xc)
-    next_state, ctx0 = ret[0], ret[1]
+    #print 'A', x.shape, xc.shape
+    next_state, ctx0, sc0 = ret[0], ret[1], ret[2]
     next_w = -1 * numpy.ones((1,)).astype('int64')  # bos indicator
+    #print 'B', next_state.shape, ctx0.shape, sc0.shape, next_w.shape
 
     for ii in xrange(maxlen):
+        #print 'C', ctx0.shape, sc0.shape
         ctx = numpy.tile(ctx0, [live_k, 1])
-        inps = [next_w, ctx, next_state]
+        sc = numpy.tile(sc0, [live_k, 1])
+        inps = [next_w, ctx, next_state, sc]
+        #print 'D', next_w.shape, ctx.shape, next_state.shape, sc.shape
         ret = f_next(*inps)
         next_p, next_w, next_state = ret[0], ret[1], ret[2]
 
