@@ -84,6 +84,8 @@ layers = {'ff': ('param_init_fflayer', 'fflayer'),
           'lstm': ('param_init_lstm', 'lstm_layer'),
           'lstm_simple_sc': ('param_init_lstm_simple_sc', 'lstm_simple_sc_layer'),
           'lstm_late_sc': ('param_init_lstm_late_sc', 'lstm_late_sc_layer'),
+          'gru_cond_legacy_simple_sc':  ('param_init_gru_cond_legacy_simple_sc', 'gru_cond_legacy_simple_sc_layer'),
+          'gru_cond_simple_sc':  ('param_init_gru_cond_simple_sc', 'gru_cond_simple_sc_layer'),
           }
 
 
@@ -1062,6 +1064,558 @@ def lstm_late_sc_layer(tparams, state_below, options, prefix='lstm_late_sc', mas
     return rval
 
 
+# Conditional GRU layer with Attention
+def param_init_gru_cond_legacy(options, params, prefix='gru_cond_legacy',
+                        nin=None, dim=None, dimctx=None, rng=None):
+    if nin is None:
+        nin = options['dim']
+    if dim is None:
+        dim = options['dim']
+    if dimctx is None:
+        dimctx = options['dim']
+
+    params = param_init_gru(options, params, prefix, nin=nin, dim=dim, rng=rng)
+
+    # context to LSTM
+    Wc = norm_weight(dimctx, dim*2, rng=rng)
+    params[_p(prefix, 'Wc')] = Wc
+
+    Wcx = norm_weight(dimctx, dim, rng=rng)
+    params[_p(prefix, 'Wcx')] = Wcx
+
+    # attention: prev -> hidden
+    Wi_att = norm_weight(nin, dimctx, rng=rng)
+    params[_p(prefix, 'Wi_att')] = Wi_att
+
+    # attention: context -> hidden
+    Wc_att = norm_weight(dimctx, rng=rng)
+    params[_p(prefix, 'Wc_att')] = Wc_att
+
+    # attention: LSTM -> hidden
+    Wd_att = norm_weight(dim, dimctx, rng=rng)
+    params[_p(prefix, 'Wd_att')] = Wd_att
+
+    # attention: hidden bias
+    b_att = numpy.zeros((dimctx,)).astype('float32')
+    params[_p(prefix, 'b_att')] = b_att
+
+    # attention:
+    U_att = norm_weight(dimctx, 1, rng=rng)
+    params[_p(prefix, 'U_att')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_tt')] = c_att
+
+    return params
+
+
+def gru_cond_legacy_layer(tparams, state_below, options, prefix='gru_cond_legacy',
+                   mask=None, context=None, one_step=False, init_state=None,
+                   context_mask=None, **kwargs):
+
+    assert context, 'Context must be provided'
+    assert context.ndim == 3, \
+        'Context must be 3-d: #annotation x #sample x dim'
+
+    if one_step:
+        assert init_state, 'previous state must be provided'
+
+    nsteps = state_below.shape[0]
+    if state_below.ndim == 3:
+        n_samples = state_below.shape[1]
+    else:
+        n_samples = 1
+
+    # mask
+    if mask is None:  # sampling or beamsearch
+        mask = tensor.alloc(1., state_below.shape[0], 1)
+
+    dim = tparams[_p(prefix, 'Wcx')].shape[1]
+
+    # initial/previous state
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
+
+    # projected context
+    pctx_ = tensor.dot(context, tparams[_p(prefix, 'Wc_att')]) + \
+        tparams[_p(prefix, 'b_att')]
+
+    def _slice(_x, n, dim):
+        if _x.ndim == 3:
+            return _x[:, :, n*dim:(n+1)*dim]
+        return _x[:, n*dim:(n+1)*dim]
+
+    # projected x into hidden state proposal
+    state_belowx = tensor.dot(state_below, tparams[_p(prefix, 'Wx')]) + \
+        tparams[_p(prefix, 'bx')]
+    # projected x into gru gates
+    state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + \
+        tparams[_p(prefix, 'b')]
+    # projected x into attention module
+    state_belowc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_att')])
+
+    # step function to be used by scan
+    # arguments    | sequences      |  outputs-info   | non-seqs ...
+    def _step_slice(m_, x_, xx_, xc_, h_, ctx_, alpha_, pctx_, cc_,
+                    U, Wc, Wd_att, U_att, c_tt, Ux, Wcx):
+
+        # attention
+        # project previous hidden state
+        pstate_ = tensor.dot(h_, Wd_att)
+
+        # add projected context
+        pctx__ = pctx_ + pstate_[None, :, :]
+
+        # add projected previous output
+        pctx__ += xc_
+        pctx__ = tensor.tanh(pctx__)
+
+        # compute alignment weights
+        alpha = tensor.dot(pctx__, U_att)+c_tt
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        alpha = tensor.exp(alpha)
+        if context_mask:
+            alpha = alpha * context_mask
+        alpha = alpha / alpha.sum(0, keepdims=True)
+
+        # conpute the weighted averages - current context to gru
+        ctx_ = (cc_ * alpha[:, :, None]).sum(0)
+
+        # conditional gru layer computations
+        preact = tensor.dot(h_, U)
+        preact += x_
+        preact += tensor.dot(ctx_, Wc)
+        preact = tensor.nnet.sigmoid(preact)
+
+        # reset and update gates
+        r = _slice(preact, 0, dim)
+        u = _slice(preact, 1, dim)
+
+        preactx = tensor.dot(h_, Ux)
+        preactx *= r
+        preactx += xx_
+        preactx += tensor.dot(ctx_, Wcx)
+
+        # hidden state proposal, leaky integrate and obtain next hidden state
+        h = tensor.tanh(preactx)
+        h = u * h_ + (1. - u) * h
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
+
+        return h, ctx_, alpha.T
+
+    seqs = [mask, state_below_, state_belowx, state_belowc]
+    _step = _step_slice
+
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'Wd_att')],
+                   tparams[_p(prefix, 'U_att')],
+                   tparams[_p(prefix, 'c_tt')],
+                   tparams[_p(prefix, 'Ux')],
+                   tparams[_p(prefix, 'Wcx')]]
+
+    if one_step:
+        rval = _step(*(
+            seqs+[init_state, None, None, pctx_, context]+shared_vars))
+    else:
+        rval, updates = theano.scan(
+            _step,
+            sequences=seqs,
+            outputs_info=[init_state,
+                          tensor.alloc(0., n_samples, context.shape[2]),
+                          tensor.alloc(0., n_samples, context.shape[0])],
+            non_sequences=[pctx_,
+                           context]+shared_vars,
+            name=_p(prefix, '_layers'),
+            n_steps=nsteps,
+            profile=profile,
+            strict=True)
+    return rval
+
+########
+########
+
+
+# Conditional GRU layer with Attention
+def param_init_gru_cond_legacy_simple_sc(options, params, prefix='gru_cond_legacy_simple_sc',
+                        nin=None, dim=None, dimctx=None, rng=None):
+    if nin is None:
+        nin = options['dim']
+    if dim is None:
+        dim = options['dim']
+    if dimctx is None:
+        dimctx = options['dim']
+
+    params = param_init_gru(options, params, prefix, nin=nin, dim=dim, rng=rng)
+
+    # context to LSTM
+    Wc = norm_weight(dimctx, dim*2, rng=rng)
+    params[_p(prefix, 'Wc')] = Wc
+
+    Wcx = norm_weight(dimctx, dim, rng=rng)
+    params[_p(prefix, 'Wcx')] = Wcx
+
+    # attention: prev -> hidden
+    Wi_att = norm_weight(nin, dimctx, rng=rng)
+    params[_p(prefix, 'Wi_att')] = Wi_att
+
+    # attention: context -> hidden
+    Wc_att = norm_weight(dimctx, rng=rng)
+    params[_p(prefix, 'Wc_att')] = Wc_att
+
+    # attention: LSTM -> hidden
+    Wd_att = norm_weight(dim, dimctx, rng=rng)
+    params[_p(prefix, 'Wd_att')] = Wd_att
+
+    # attention: hidden bias
+    b_att = numpy.zeros((dimctx,)).astype('float32')
+    params[_p(prefix, 'b_att')] = b_att
+
+    # attention:
+    U_att = norm_weight(dimctx, 1, rng=rng)
+    params[_p(prefix, 'U_att')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_tt')] = c_att
+
+    Wsc = numpy.concatenate([norm_weight(nin, dim, rng=rng),
+                             norm_weight(nin, dim, rng=rng)], axis=1)
+    params[_p(prefix, 'Wsc')] = Wsc
+
+    Wscx = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Wscx')] = Wscx
+
+    Wscc = norm_weight(nin, dimctx, rng=rng)
+    params[_p(prefix, 'Wscc')] = Wscc
+
+    return params
+
+
+def gru_cond_legacy_simple_sc_layer(tparams, state_below, options, prefix='gru_cond_legacy_simple_sc',
+                   mask=None, context=None, one_step=False, init_state=None,
+                   context_mask=None, **kwargs):
+
+    assert context, 'Context must be provided'
+    assert context.ndim == 3, \
+        'Context must be 3-d: #annotation x #sample x dim'
+
+    if one_step:
+        assert init_state, 'previous state must be provided'
+
+    nsteps = state_below.shape[0]
+    if state_below.ndim == 3:
+        n_samples = state_below.shape[1]
+    else:
+        n_samples = 1
+
+    assert 'sc' in kwargs # sc: n_samples x dim_sc
+
+    # mask
+    if mask is None:  # sampling or beamsearch
+        mask = tensor.alloc(1., state_below.shape[0], 1)
+
+    dim = tparams[_p(prefix, 'Wcx')].shape[1]
+
+    # initial/previous state
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
+
+    # projected context
+    pctx_ = tensor.dot(context, tparams[_p(prefix, 'Wc_att')]) + \
+        tparams[_p(prefix, 'b_att')]
+
+    def _slice(_x, n, dim):
+        if _x.ndim == 3:
+            return _x[:, :, n*dim:(n+1)*dim]
+        return _x[:, n*dim:(n+1)*dim]
+
+    # projected x into hidden state proposal
+    state_belowx = tensor.dot(state_below, tparams[_p(prefix, 'Wx')]) + \
+        tparams[_p(prefix, 'bx')] + \
+        tensor.dot(kwargs['sc'], tparams[_p(prefix, 'Wscx')])
+    # projected x into gru gates
+    state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + \
+        tparams[_p(prefix, 'b')] + \
+        tensor.dot(kwargs['sc'], tparams[_p(prefix, 'Wsc')])
+    # projected x into attention module
+    state_belowc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_att')]) + \
+        tensor.dot(kwargs['sc'], tparams[_p(prefix, 'Wscc')]) # Should a bias be added here?
+
+    # step function to be used by scan
+    # arguments    | sequences      |  outputs-info   | non-seqs ...
+    def _step_slice(m_, x_, xx_, xc_, h_, ctx_, alpha_, pctx_, cc_,
+                    U, Wc, Wd_att, U_att, c_tt, Ux, Wcx):
+
+        # attention
+        # project previous hidden state
+        pstate_ = tensor.dot(h_, Wd_att)
+
+        # add projected context
+        pctx__ = pctx_ + pstate_[None, :, :]
+
+        # add projected previous output
+        pctx__ += xc_
+        pctx__ = tensor.tanh(pctx__)
+
+        # compute alignment weights
+        alpha = tensor.dot(pctx__, U_att)+c_tt
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        alpha = tensor.exp(alpha)
+        if context_mask:
+            alpha = alpha * context_mask
+        alpha = alpha / alpha.sum(0, keepdims=True)
+
+        # conpute the weighted averages - current context to gru
+        ctx_ = (cc_ * alpha[:, :, None]).sum(0)
+
+        # conditional gru layer computations
+        preact = tensor.dot(h_, U)
+        preact += x_
+        preact += tensor.dot(ctx_, Wc)
+        preact = tensor.nnet.sigmoid(preact)
+
+        # reset and update gates
+        r = _slice(preact, 0, dim)
+        u = _slice(preact, 1, dim)
+
+        preactx = tensor.dot(h_, Ux)
+        preactx *= r
+        preactx += xx_
+        preactx += tensor.dot(ctx_, Wcx)
+
+        # hidden state proposal, leaky integrate and obtain next hidden state
+        h = tensor.tanh(preactx)
+        h = u * h_ + (1. - u) * h
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
+
+        return h, ctx_, alpha.T
+
+    seqs = [mask, state_below_, state_belowx, state_belowc]
+    _step = _step_slice
+
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'Wd_att')],
+                   tparams[_p(prefix, 'U_att')],
+                   tparams[_p(prefix, 'c_tt')],
+                   tparams[_p(prefix, 'Ux')],
+                   tparams[_p(prefix, 'Wcx')]]
+
+    if one_step:
+        rval = _step(*(
+            seqs+[init_state, None, None, pctx_, context]+shared_vars))
+    else:
+        rval, updates = theano.scan(
+            _step,
+            sequences=seqs,
+            outputs_info=[init_state,
+                          tensor.alloc(0., n_samples, context.shape[2]),
+                          tensor.alloc(0., n_samples, context.shape[0])],
+            non_sequences=[pctx_,
+                           context]+shared_vars,
+            name=_p(prefix, '_layers'),
+            n_steps=nsteps,
+            profile=profile,
+            strict=True)
+    return rval
+
+# Conditional GRU layer with Attention
+def param_init_gru_cond_simple_sc(options, params, prefix='gru_cond_simple_sc',
+                        nin=None, dim=None, dimctx=None, rng=None):
+    if nin is None:
+        nin = options['dim']
+    if dim is None:
+        dim = options['dim']
+    if dimctx is None:
+        dimctx = options['dim']
+
+    W = numpy.concatenate([norm_weight(nin, dim, rng=rng),
+                           norm_weight(nin, dim, rng=rng)], axis=1)
+    params[_p(prefix, 'W')] = W
+    params[_p(prefix, 'b')] = numpy.zeros((2 * dim,)).astype('float32')
+    U = numpy.concatenate([ortho_weight(dim, rng=rng),
+                           ortho_weight(dim, rng=rng)], axis=1)
+    params[_p(prefix, 'U')] = U
+
+    Wx = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Wx')] = Wx
+    Ux = ortho_weight(dim, rng=rng)
+    params[_p(prefix, 'Ux')] = Ux
+    params[_p(prefix, 'bx')] = numpy.zeros((dim,)).astype('float32')
+
+    U_nl = numpy.concatenate([ortho_weight(dim, rng=rng),
+                              ortho_weight(dim, rng=rng)], axis=1)
+    params[_p(prefix, 'U_nl')] = U_nl
+    params[_p(prefix, 'b_nl')] = numpy.zeros((2 * dim,)).astype('float32')
+
+    Ux_nl = ortho_weight(dim, rng=rng)
+    params[_p(prefix, 'Ux_nl')] = Ux_nl
+    params[_p(prefix, 'bx_nl')] = numpy.zeros((dim,)).astype('float32')
+
+    # context to LSTM
+    Wc = norm_weight(dimctx, dim*2, rng=rng)
+    params[_p(prefix, 'Wc')] = Wc
+
+    Wcx = norm_weight(dimctx, dim, rng=rng)
+    params[_p(prefix, 'Wcx')] = Wcx
+
+    # attention: combined -> hidden
+    W_comb_att = norm_weight(dim, dimctx, rng=rng)
+    params[_p(prefix, 'W_comb_att')] = W_comb_att
+
+    # attention: context -> hidden
+    Wc_att = norm_weight(dimctx, rng=rng)
+    params[_p(prefix, 'Wc_att')] = Wc_att
+
+    # attention: hidden bias
+    b_att = numpy.zeros((dimctx,)).astype('float32')
+    params[_p(prefix, 'b_att')] = b_att
+
+    # attention:
+    U_att = norm_weight(dimctx, 1, rng=rng)
+    params[_p(prefix, 'U_att')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_tt')] = c_att
+
+    Wsc = numpy.concatenate([norm_weight(nin, dim, rng=rng),
+                             norm_weight(nin, dim, rng=rng)], axis=1)
+    params[_p(prefix, 'Wsc')] = Wsc
+
+    Wscx = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Wscx')] = Wscx
+
+    return params
+
+
+def gru_cond_simple_sc_layer(tparams, state_below, options, prefix='gru_cond_simple_sc',
+                   mask=None, context=None, one_step=False,
+                   init_memory=None, init_state=None,
+                   context_mask=None,
+                   **kwargs):
+
+    assert context, 'Context must be provided'
+
+    if one_step:
+        assert init_state, 'previous state must be provided'
+
+    nsteps = state_below.shape[0]
+    if state_below.ndim == 3:
+        n_samples = state_below.shape[1]
+    else:
+        n_samples = 1
+
+    # mask
+    if mask is None:
+        mask = tensor.alloc(1., state_below.shape[0], 1)
+
+    dim = tparams[_p(prefix, 'Wcx')].shape[1]
+
+    # initial/previous state
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
+
+    # projected context
+    assert context.ndim == 3, \
+        'Context must be 3-d: #annotation x #sample x dim'
+    pctx_ = tensor.dot(context, tparams[_p(prefix, 'Wc_att')]) +\
+        tparams[_p(prefix, 'b_att')]
+
+    def _slice(_x, n, dim):
+        if _x.ndim == 3:
+            return _x[:, :, n*dim:(n+1)*dim]
+        return _x[:, n*dim:(n+1)*dim]
+
+    # projected x
+    state_belowx = tensor.dot(state_below, tparams[_p(prefix, 'Wx')]) +\
+        tparams[_p(prefix, 'bx')] + \
+        tensor.dot(kwargs['sc'], tparams[_p(prefix, 'Wscx')])
+    state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) +\
+        tparams[_p(prefix, 'b')] + \
+        tensor.dot(kwargs['sc'], tparams[_p(prefix, 'Wsc')])
+
+    def _step_slice(m_, x_, xx_, h_, ctx_, alpha_, pctx_, cc_,
+                    U, Wc, W_comb_att, U_att, c_tt, Ux, Wcx,
+                    U_nl, Ux_nl, b_nl, bx_nl):
+        preact1 = tensor.dot(h_, U)
+        preact1 += x_
+        preact1 = tensor.nnet.sigmoid(preact1)
+
+        r1 = _slice(preact1, 0, dim)
+        u1 = _slice(preact1, 1, dim)
+
+        preactx1 = tensor.dot(h_, Ux)
+        preactx1 *= r1
+        preactx1 += xx_
+
+        h1 = tensor.tanh(preactx1)
+
+        h1 = u1 * h_ + (1. - u1) * h1
+        h1 = m_[:, None] * h1 + (1. - m_)[:, None] * h_
+
+        # attention
+        pstate_ = tensor.dot(h1, W_comb_att)
+        pctx__ = pctx_ + pstate_[None, :, :]
+        #pctx__ += xc_
+        pctx__ = tensor.tanh(pctx__)
+        alpha = tensor.dot(pctx__, U_att)+c_tt
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        alpha = tensor.exp(alpha)
+        if context_mask:
+            alpha = alpha * context_mask
+        alpha = alpha / alpha.sum(0, keepdims=True)
+        ctx_ = (cc_ * alpha[:, :, None]).sum(0)  # current context
+
+        preact2 = tensor.dot(h1, U_nl)+b_nl
+        preact2 += tensor.dot(ctx_, Wc)
+        preact2 = tensor.nnet.sigmoid(preact2)
+
+        r2 = _slice(preact2, 0, dim)
+        u2 = _slice(preact2, 1, dim)
+
+        preactx2 = tensor.dot(h1, Ux_nl)+bx_nl
+        preactx2 *= r2
+        preactx2 += tensor.dot(ctx_, Wcx)
+
+        h2 = tensor.tanh(preactx2)
+
+        h2 = u2 * h1 + (1. - u2) * h2
+        h2 = m_[:, None] * h2 + (1. - m_)[:, None] * h1
+
+        return h2, ctx_, alpha.T  # pstate_, preact, preactx, r, u
+
+    seqs = [mask, state_below_, state_belowx]
+    #seqs = [mask, state_below_, state_belowx, state_belowc]
+    _step = _step_slice
+
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'W_comb_att')],
+                   tparams[_p(prefix, 'U_att')],
+                   tparams[_p(prefix, 'c_tt')],
+                   tparams[_p(prefix, 'Ux')],
+                   tparams[_p(prefix, 'Wcx')],
+                   tparams[_p(prefix, 'U_nl')],
+                   tparams[_p(prefix, 'Ux_nl')],
+                   tparams[_p(prefix, 'b_nl')],
+                   tparams[_p(prefix, 'bx_nl')]]
+
+    if one_step:
+        rval = _step(*(seqs + [init_state, None, None, pctx_, context] +
+                       shared_vars))
+    else:
+        rval, updates = theano.scan(_step,
+                                    sequences=seqs,
+                                    outputs_info=[init_state,
+                                                  tensor.alloc(0., n_samples,
+                                                               context.shape[2]),
+                                                  tensor.alloc(0., n_samples,
+                                                               context.shape[0])],
+                                    non_sequences=[pctx_, context]+shared_vars,
+                                    name=_p(prefix, '_layers'),
+                                    n_steps=nsteps,
+                                    profile=profile,
+                                    strict=True)
+    return rval
+
+
 # initialize all parameters
 def init_params(options):
     params = OrderedDict()
@@ -1219,7 +1773,8 @@ def build_model(tparams, options):
                                             mask=y_mask, context=ctx,
                                             context_mask=x_mask,
                                             one_step=False,
-                                            init_state=init_state)
+                                            init_state=init_state,
+                                            sc=context_emb)
     # hidden states of the decoder gru
     proj_h = proj[0]
 
@@ -1326,7 +1881,8 @@ def build_sampler(tparams, options, trng):
                                             prefix='decoder',
                                             mask=None, context=ctx,
                                             one_step=True,
-                                            init_state=init_state)
+                                            init_state=init_state,
+                                            sc=context_emb)
     # get the next hidden state
     next_state = proj[0]
 
