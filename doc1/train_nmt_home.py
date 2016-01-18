@@ -36,7 +36,7 @@ def main(job_id, params):
                      trng=1234,
                      save_inter=True,
                      encoder='lstm_late_sc',
-                     decoder='lstm_cond_legacy_simple_sc')
+                     decoder='lstm_cond_legacy_late_sc')
     return validerr
 
 if __name__ == '__main__':
@@ -44,7 +44,7 @@ if __name__ == '__main__':
         'model': ['/home/sebastien/Documents/WIT3/en-fr/models/debug_model.npz'],
         'dim_word': [100],
         'dim': [200],
-        'n-words': [10000], 
+        'n-words': [10234], 
         'optimizer': ['adadelta'],
         'decay-c': [0.], 
         'clip-c': [1.], 
