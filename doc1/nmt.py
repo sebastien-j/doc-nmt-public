@@ -86,6 +86,7 @@ layers = {'ff': ('param_init_fflayer', 'fflayer'),
           'lstm_late_sc': ('param_init_lstm_late_sc', 'lstm_late_sc_layer'),
           'gru_cond_legacy_simple_sc':  ('param_init_gru_cond_legacy_simple_sc', 'gru_cond_legacy_simple_sc_layer'),
           'gru_cond_simple_sc':  ('param_init_gru_cond_simple_sc', 'gru_cond_simple_sc_layer'),
+          'lstm_cond_legacy': ('param_init_lstm_cond_legacy', 'lstm_cond_legacy_layer'),
           }
 
 
@@ -1615,6 +1616,164 @@ def gru_cond_simple_sc_layer(tparams, state_below, options, prefix='gru_cond_sim
                                     strict=True)
     return rval
 
+# Conditional LSTM layer with Attention
+def param_init_lstm_cond_legacy(options, params, prefix='lstm_cond_legacy',
+                        nin=None, dim=None, dimctx=None, rng=None):
+    if nin is None:
+        nin = options['dim']
+    if dim is None:
+        dim = options['dim']
+    if dimctx is None:
+        dimctx = options['dim']
+
+    params = param_init_lstm(options, params, prefix, nin=nin, dim=dim, rng=rng)
+
+    # context to LSTM
+    Wc = norm_weight(dimctx, dim*4, rng=rng)
+    params[_p(prefix, 'Wc')] = Wc
+
+    # attention: prev -> hidden
+    Wi_att = norm_weight(nin, dimctx, rng=rng)
+    params[_p(prefix, 'Wi_att')] = Wi_att
+
+    # attention: context -> hidden
+    Wc_att = norm_weight(dimctx, rng=rng)
+    params[_p(prefix, 'Wc_att')] = Wc_att
+
+    # attention: LSTM -> hidden
+    Wd_att = norm_weight(dim, dimctx, rng=rng)
+    params[_p(prefix, 'Wd_att')] = Wd_att
+
+    # attention: hidden bias
+    b_att = numpy.zeros((dimctx,)).astype('float32')
+    params[_p(prefix, 'b_att')] = b_att
+
+    # attention:
+    U_att = norm_weight(dimctx, 1, rng=rng)
+    params[_p(prefix, 'U_att')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_tt')] = c_att
+
+    return params
+
+
+def lstm_cond_legacy_layer(tparams, state_below, options, prefix='lstm_cond_legacy',
+                   mask=None, context=None, one_step=False, init_state=None, init_memory=None,
+                   context_mask=None, **kwargs):
+
+    assert context, 'Context must be provided'
+    assert context.ndim == 3, \
+        'Context must be 3-d: #annotation x #sample x dim'
+
+    if one_step:
+        assert init_state, 'previous state must be provided'
+        assert init_memory, 'previous cell must be provided'
+
+    nsteps = state_below.shape[0]
+    if state_below.ndim == 3:
+        n_samples = state_below.shape[1]
+    else:
+        n_samples = 1
+
+    # mask
+    if mask is None:  # sampling or beamsearch
+        mask = tensor.alloc(1., state_below.shape[0], 1)
+
+    dim = tparams[_p(prefix,'U')].shape[0]
+
+    # initial/previous state
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
+    if init_memory is None:
+        init_memory = tensor.alloc(0., n_samples, dim)
+
+    # projected context
+    pctx_ = tensor.dot(context, tparams[_p(prefix, 'Wc_att')]) + \
+        tparams[_p(prefix, 'b_att')]
+
+    def _slice(_x, n, dim):
+        if _x.ndim == 3:
+            return _x[:, :, n*dim:(n+1)*dim]
+        return _x[:, n*dim:(n+1)*dim]
+
+    # projected x into lstm
+    state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + \
+        tparams[_p(prefix, 'b')]
+    # projected x into attention module
+    state_belowc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_att')])
+
+    # step function to be used by scan
+    # arguments    | sequences      |  outputs-info   | non-seqs ...
+    def _step_slice(m_, x_, xc_, h_, ctx_, alpha_, c_, pctx_, cc_,
+                    U, Wc, Wd_att, U_att, c_tt):
+
+        # attention
+        # project previous hidden state
+        pstate_ = tensor.dot(h_, Wd_att)
+
+        # add projected context
+        pctx__ = pctx_ + pstate_[None, :, :]
+
+        # add projected previous output
+        pctx__ += xc_
+        pctx__ = tensor.tanh(pctx__)
+
+        # compute alignment weights
+        alpha = tensor.dot(pctx__, U_att)+c_tt
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        alpha = tensor.exp(alpha)
+        if context_mask:
+            alpha = alpha * context_mask
+        alpha = alpha / alpha.sum(0, keepdims=True)
+
+        # conpute the weighted averages - current context to gru
+        ctx_ = (cc_ * alpha[:, :, None]).sum(0)
+
+        # conditional lstm layer computations
+        preact = tensor.dot(h_, U)
+        preact += x_
+        preact += tensor.dot(ctx_, Wc)
+
+        i = tensor.nnet.sigmoid(_slice(preact, 0, dim))
+        f = tensor.nnet.sigmoid(_slice(preact, 1, dim))
+        o = tensor.nnet.sigmoid(_slice(preact, 2, dim))
+        c = tensor.tanh(_slice(preact, 3, dim))
+
+        c = f * c_ + i * c
+        c = m_[:, None] * c + (1. - m_)[:, None] * c_
+
+        h = o * tensor.tanh(c)
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
+
+        return h, ctx_, alpha.T, c
+
+    seqs = [mask, state_below_, state_belowc]
+    _step = _step_slice
+
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'Wd_att')],
+                   tparams[_p(prefix, 'U_att')],
+                   tparams[_p(prefix, 'c_tt')]]
+
+    if one_step:
+        rval = _step(*(
+            seqs+[init_state, None, None, init_memory, pctx_, context]+shared_vars))
+    else:
+        rval, updates = theano.scan(
+            _step,
+            sequences=seqs,
+            outputs_info=[init_state,
+                          tensor.alloc(0., n_samples, context.shape[2]),
+                          tensor.alloc(0., n_samples, context.shape[0]),
+                          init_memory],
+            non_sequences=[pctx_,
+                           context]+shared_vars,
+            name=_p(prefix, '_layers'),
+            n_steps=nsteps,
+            profile=profile,
+            strict=True)
+    return rval
 
 # initialize all parameters
 def init_params(options):
@@ -1653,9 +1812,13 @@ def init_params(options):
                                               dim=options['dim'], rng=rng)
     ctxdim = 2 * options['dim']
 
-    # init_state, init_cell
+    # init_state, init_memory
     params = get_layer('ff')[0](options, params, prefix='ff_state',
                                 nin=ctxdim, nout=options['dim'], rng=rng)
+
+    if options['decoder'].startswith('lstm'):
+        params = get_layer('ff')[0](options, params, prefix='ff_cell',
+                                    nin=ctxdim, nout=options['dim'], rng=rng)    
     # decoder
     params = get_layer(options['decoder'])[0](options, params,
                                               prefix='decoder',
@@ -1756,7 +1919,10 @@ def build_model(tparams, options):
     # initial decoder state
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
                                     prefix='ff_state', activ='tanh')
-
+    init_memory = None
+    if options['decoder'].startswith('lstm'):
+        init_memory = get_layer('ff')[1](tparams, ctx_mean, options,
+                                        prefix='ff_cell', activ='tanh')
     # word embedding (target), we will shift the target sequence one time step
     # to the right. This is done because of the bi-gram connections in the
     # readout and decoder rnn. The first target will be all zeros and we will
@@ -1774,6 +1940,7 @@ def build_model(tparams, options):
                                             context_mask=x_mask,
                                             one_step=False,
                                             init_state=init_state,
+                                            init_memory=init_memory,
                                             sc=context_emb)
     # hidden states of the decoder gru
     proj_h = proj[0]
@@ -1861,9 +2028,14 @@ def build_sampler(tparams, options, trng):
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
                                     prefix='ff_state', activ='tanh')
-
+    if options['decoder'].startswith('lstm'):
+        init_memory = get_layer('ff')[1](tparams, ctx_mean, options,
+                                        prefix='ff_cell', activ='tanh')
     print 'Building f_init...',
-    outs = [init_state, ctx, context_emb]
+    if options['decoder'].startswith('lstm'):
+        outs = [init_state, ctx, context_emb, init_memory]
+    else:
+        outs = [init_state, ctx, context_emb]
     f_init = theano.function([x, xc], outs, name='f_init', profile=profile)
     print 'Done'
 
@@ -1876,15 +2048,20 @@ def build_sampler(tparams, options, trng):
                         tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
                         tparams['Wemb_dec'][y])
 
+    if not options['decoder'].startswith('lstm'):
+        init_memory = None
     # apply one step of conditional gru with attention
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
                                             prefix='decoder',
                                             mask=None, context=ctx,
                                             one_step=True,
                                             init_state=init_state,
+                                            init_memory=init_memory,
                                             sc=context_emb)
     # get the next hidden state
     next_state = proj[0]
+    if options['decoder'].startswith('lstm'):
+        next_memory = proj[3]
 
     # get the weighted averages of context for this target word y
     ctxs = proj[1]
@@ -1913,8 +2090,12 @@ def build_sampler(tparams, options, trng):
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
     print 'Building f_next..',
-    inps = [y, ctx, init_state, context_emb]
-    outs = [next_probs, next_sample, next_state]
+    if options['decoder'].startswith('lstm'):
+        inps = [y, ctx, init_state, context_emb, init_memory]
+        outs = [next_probs, next_sample, next_state, next_memory]
+    else:
+        inps = [y, ctx, init_state, context_emb]
+        outs = [next_probs, next_sample, next_state]
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
     print 'Done'
 
@@ -1942,23 +2123,33 @@ def gen_sample(tparams, f_init, f_next, x, xc, options, trng=None, k=1, maxlen=3
     hyp_samples = [[]] * live_k
     hyp_scores = numpy.zeros(live_k).astype('float32')
     hyp_states = []
+    if options['decoder'].startswith('lstm'):
+        hyp_memories = []
 
     # get initial state of decoder rnn and encoder context
     ret = f_init(x, xc)
     #print 'A', x.shape, xc.shape
-    next_state, ctx0, sc0 = ret[0], ret[1], ret[2]
+    if options['decoder'].startswith('lstm'):
+        next_state, ctx0, sc0, next_memory = ret[0], ret[1], ret[2], ret[3]
+    else:
+        next_state, ctx0, sc0 = ret[0], ret[1], ret[2]
     next_w = -1 * numpy.ones((1,)).astype('int64')  # bos indicator
-    #print 'B', next_state.shape, ctx0.shape, sc0.shape, next_w.shape
+    #print 'B', next_w.shape, next_state.shape, ctx0.shape, sc0.shape, next_memory.shape
 
     for ii in xrange(maxlen):
         #print 'C', ctx0.shape, sc0.shape
         ctx = numpy.tile(ctx0, [live_k, 1])
         sc = numpy.tile(sc0, [live_k, 1])
-        inps = [next_w, ctx, next_state, sc]
-        #print 'D', next_w.shape, ctx.shape, next_state.shape, sc.shape
+        if options['decoder'].startswith('lstm'):
+            inps = [next_w, ctx, next_state, sc, next_memory]
+        else:
+            inps = [next_w, ctx, next_state, sc]
+        #print 'D', next_w.shape, ctx.shape, next_state.shape, sc.shape, next_memory.shape
         ret = f_next(*inps)
-        next_p, next_w, next_state = ret[0], ret[1], ret[2]
-
+        if options['decoder'].startswith('lstm'):
+            next_p, next_w, next_state, next_memory = ret[0], ret[1], ret[2], ret[3]
+        else:
+            next_p, next_w, next_state = ret[0], ret[1], ret[2]
         if stochastic:
             if argmax:
                 nw = next_p[0].argmax()
@@ -1981,17 +2172,23 @@ def gen_sample(tparams, f_init, f_next, x, xc, options, trng=None, k=1, maxlen=3
             new_hyp_samples = []
             new_hyp_scores = numpy.zeros(k-dead_k).astype('float32')
             new_hyp_states = []
+            if options['decoder'].startswith('lstm'):
+                new_hyp_memories = []
 
             for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
                 new_hyp_samples.append(hyp_samples[ti]+[wi])
                 new_hyp_scores[idx] = copy.copy(costs[idx])
                 new_hyp_states.append(copy.copy(next_state[ti]))
+                if options['decoder'].startswith('lstm'):
+                    new_hyp_memories.append(copy.copy(next_memory[ti]))
 
             # check the finished samples
             new_live_k = 0
             hyp_samples = []
             hyp_scores = []
             hyp_states = []
+            if options['decoder'].startswith('lstm'):
+                hyp_memories = []
 
             for idx in xrange(len(new_hyp_samples)):
                 if new_hyp_samples[idx][-1] == 0:
@@ -2003,6 +2200,8 @@ def gen_sample(tparams, f_init, f_next, x, xc, options, trng=None, k=1, maxlen=3
                     hyp_samples.append(new_hyp_samples[idx])
                     hyp_scores.append(new_hyp_scores[idx])
                     hyp_states.append(new_hyp_states[idx])
+                    if options['decoder'].startswith('lstm'):
+                        hyp_memories.append(new_hyp_memories[idx])
             hyp_scores = numpy.array(hyp_scores)
             live_k = new_live_k
 
@@ -2013,6 +2212,8 @@ def gen_sample(tparams, f_init, f_next, x, xc, options, trng=None, k=1, maxlen=3
 
             next_w = numpy.array([w[-1] for w in hyp_samples])
             next_state = numpy.array(hyp_states)
+            if options['decoder'].startswith('lstm'):
+                next_memory = numpy.array(hyp_memories)
 
     if not stochastic:
         # dump every remaining one
