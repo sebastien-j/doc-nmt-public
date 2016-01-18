@@ -1005,6 +1005,8 @@ def param_init_lstm_late_sc(options, params, prefix='lstm_late_sc', nin=None, di
 
     Wr = norm_weight(dim, dim, rng=rng)
     params[_p(prefix, 'Wr')] = Wr
+    Wrr = norm_weight(dim, dim, rng=rng)
+    params[_p(prefix, 'Wrr')] = Wrr
     params[_p(prefix,'br')] = numpy.zeros((dim,)).astype('float32')
 
 
@@ -1034,7 +1036,7 @@ def lstm_late_sc_layer(tparams, state_below, options, prefix='lstm_late_sc', mas
         return _x[:, n*dim:(n+1)*dim]
 
     # one time step of the lstm
-    def _step(m_, x_, h_, c_, tsc, U, Wr, br):
+    def _step(m_, x_, h_, c_, tsc, U, Wr, Wrr, br):
         preact = tensor.dot(h_, U)
         preact += x_
 
@@ -1046,7 +1048,7 @@ def lstm_late_sc_layer(tparams, state_below, options, prefix='lstm_late_sc', mas
         c = f * c_ + i * c
         c = m_[:, None] * c + (1. - m_)[:, None] * c_
 
-        r = tensor.nnet.sigmoid(tensor.dot(tsc, Wr) + tensor.dot(c, Wr) + br)
+        r = tensor.nnet.sigmoid(tensor.dot(tsc, Wr) + tensor.dot(c, Wrr) + br)
 
         h = o * tensor.tanh(c + r * tsc)
         h = m_[:, None] * h + (1. - m_)[:, None] * h_
@@ -1056,7 +1058,7 @@ def lstm_late_sc_layer(tparams, state_below, options, prefix='lstm_late_sc', mas
     state_below = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + tparams[_p(prefix, 'b')]
     tsc = tensor.dot(kwargs['sc'], tparams[_p(prefix, 'Wsc')])
 
-    shared_vars = [tparams[_p(prefix, 'U')], tparams[_p(prefix, 'Wr')], tparams[_p(prefix, 'br')]]
+    shared_vars = [tparams[_p(prefix, 'U')], tparams[_p(prefix, 'Wr')], tparams[_p(prefix, 'Wrr')], tparams[_p(prefix, 'br')]]
 
     rval, updates = theano.scan(_step,
                                 sequences=[mask, state_below],
@@ -1995,6 +1997,8 @@ def param_init_lstm_cond_legacy_late_sc(options, params, prefix='lstm_cond_legac
 
     Wr = norm_weight(dim, dim, rng=rng)
     params[_p(prefix, 'Wr')] = Wr
+    Wrr = norm_weight(dim, dim, rng=rng)
+    params[_p(prefix, 'Wrr')] = Wrr
     params[_p(prefix,'br')] = numpy.zeros((dim,)).astype('float32')
 
     return params
@@ -2053,7 +2057,7 @@ def lstm_cond_legacy_late_sc_layer(tparams, state_below, options, prefix='lstm_c
     # step function to be used by scan
     # arguments    | sequences      |  outputs-info   | non-seqs ...
     def _step_slice(m_, x_, xc_, h_, ctx_, alpha_, c_, pctx_, cc_, tsc,
-                    U, Wc, Wd_att, U_att, c_tt, Wr, br):
+                    U, Wc, Wd_att, U_att, c_tt, Wr, Wrr, br):
 
         # attention
         # project previous hidden state
@@ -2090,7 +2094,7 @@ def lstm_cond_legacy_late_sc_layer(tparams, state_below, options, prefix='lstm_c
         c = f * c_ + i * c
         c = m_[:, None] * c + (1. - m_)[:, None] * c_
 
-        r = tensor.nnet.sigmoid(tensor.dot(tsc, Wr) + tensor.dot(c, Wr) + br)
+        r = tensor.nnet.sigmoid(tensor.dot(tsc, Wr) + tensor.dot(c, Wrr) + br)
 
         h = o * tensor.tanh(c + r * tsc)
         h = m_[:, None] * h + (1. - m_)[:, None] * h_
@@ -2106,6 +2110,7 @@ def lstm_cond_legacy_late_sc_layer(tparams, state_below, options, prefix='lstm_c
                    tparams[_p(prefix, 'U_att')],
                    tparams[_p(prefix, 'c_tt')],
                    tparams[_p(prefix, 'Wr')],
+                   tparams[_p(prefix, 'Wrr')],
                    tparams[_p(prefix, 'br')]]
 
     if one_step:
