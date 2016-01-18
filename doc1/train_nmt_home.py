@@ -36,7 +36,7 @@ def main(job_id, params):
                      trng=1234,
                      save_inter=True,
                      encoder='lstm_late_sc',
-                     decoder='lstm_cond_legacy')
+                     decoder='lstm_cond_legacy_simple_sc')
     return validerr
 
 if __name__ == '__main__':
