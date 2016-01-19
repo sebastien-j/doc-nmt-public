@@ -40,7 +40,7 @@ if __name__ == '__main__':
     main(0, {
         'model': ['/misc/kcgscratch1/WIT3/en-fr/models/debug_model.s2.0.npz'],
         'dim_word': [500],
-        'dim': [10000],
+        'dim': [1000],
         'n-words': [10234], 
         'optimizer': ['adadelta'],
         'decay-c': [0.], 
