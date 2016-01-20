@@ -2232,6 +2232,10 @@ def build_model(tparams, options):
 
     # tensor.clip is not strictly necessary anymore. (EOS always there)
     context_emb = (context_emb * xc_mask[:,:,None]).sum(0) / tensor.clip(xc_mask.sum(0), 1.0, numpy.inf)[:, None] # n_samples x options['dim_word'], n_samples x 1
+
+    if options['kwargs'].get('use_sc_dropout', False):
+        context_emb = dropout_layer(context_emb, use_noise, trng, p=1.0-options['kwargs'].get('use_sc_dropout_p', 0.5))
+
     f_context_emb = get_layer('ff')[1](tparams, context_emb, options,
                                     prefix='f_context_emb', activ='tanh')
     r_context_emb = get_layer('ff')[1](tparams, context_emb, options,
@@ -2357,6 +2361,10 @@ def build_sampler(tparams, options, trng, use_noise=None):
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
     context_emb = context_emb.mean(0) # Will probably crash here for no context # FIXME
+
+    if options['kwargs'].get('use_sc_dropout', False):
+        context_emb = dropout_layer(context_emb, use_noise, trng, p=1.0-options['kwargs'].get('use_sc_dropout_p', 0.5))
+
     f_context_emb = get_layer('ff')[1](tparams, context_emb, options,
                                     prefix='f_context_emb', activ='tanh')
     r_context_emb = get_layer('ff')[1](tparams, context_emb, options,
