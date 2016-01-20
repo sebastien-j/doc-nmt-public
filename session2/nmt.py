@@ -1217,7 +1217,7 @@ def train(rng=123,
                          maxlen=maxlen)
 
     if 'other_datasets' in kwargs:
-        other = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1], kwargs['other_datasets'][2],
+        other = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1],
                              dictionaries[0], dictionaries[1],
                              n_words_source=n_words_src, n_words_target=n_words,
                              batch_size=valid_batch_size,
