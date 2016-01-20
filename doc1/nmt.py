@@ -2795,6 +2795,13 @@ def train(rng=123,
                          batch_size=valid_batch_size,
                          maxlen=maxlen)
 
+    if 'other_datasets' in kwargs:
+        other = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1], kwargs['other_datasets'][2],
+                             dictionaries[0], dictionaries[1],
+                             n_words_source=n_words_src, n_words_target=n_words,
+                             batch_size=valid_batch_size,
+                             maxlen=maxlen)
+
     print 'Building model'
     params = init_params(model_options)
     # reload parameters
@@ -3003,6 +3010,12 @@ def train(rng=123,
                 if numpy.isnan(valid_err):
                     ipdb.set_trace()
 
+                if 'other_datasets' in kwargs:
+                    other_errs = pred_probs(f_log_probs, prepare_data,
+                                            model_options, other)
+                    other_err = other_errs.mean()
+
+                print 'Other ', other_err
                 print 'Valid ', valid_err
 
             # finish after this many updates
