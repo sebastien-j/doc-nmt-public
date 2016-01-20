@@ -29,6 +29,9 @@ def main(job_id, params):
                      valid_datasets=['/misc/kcgscratch1/WIT3/en-fr/debug/IWSLT15.TED.dev2010.en-fr.en.out.xml.tok.text.bpe10000', 
                                '/misc/kcgscratch1/WIT3/en-fr/debug/IWSLT15.TED.dev2010.en-fr.fr.out.xml.tok.text.bpe10000',
                                '/misc/kcgscratch1/WIT3/en-fr/debug/IWSLT15.TED.dev2010.en-fr.en.out.xml.tok.context.bpe10000'],
+                     other_datasets=['/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.en.tok.text.bpe10000.first1000', 
+                               '/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.fr.tok.text.bpe10000.first1000',
+                               '/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.en.tok.context.bpe10000.first1000'],
                      dictionaries=['/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.en.tok.text.bpe10000.pkl', 
                                    '/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.fr.tok.text.bpe10000.pkl'],
                      use_dropout=params['use-dropout'][0],
@@ -41,9 +44,9 @@ def main(job_id, params):
 
 if __name__ == '__main__':
     main(0, {
-        'model': ['/misc/kcgscratch1/WIT3/en-fr/models/debug_model.2.npz'],
-        'dim_word': [500],
-        'dim': [1000],
+        'model': ['/misc/kcgscratch1/WIT3/en-fr/models/debug_model.5.npz'],
+        'dim_word': [250],
+        'dim': [500],
         'n-words': [10234], 
         'optimizer': ['adadelta'],
         'decay-c': [0.], 
