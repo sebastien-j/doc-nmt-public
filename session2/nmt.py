@@ -1184,7 +1184,8 @@ def train(rng=123,
               '/data/lisatmp3/chokyun/europarl/europarl-v7.fr-en.fr.tok.pkl'],
           use_dropout=False,
           reload_=False,
-          save_inter=False):
+          save_inter=False,
+          **kwargs):
 
     # Model options
     model_options = locals().copy()
