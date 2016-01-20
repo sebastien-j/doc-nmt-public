@@ -42,12 +42,13 @@ def itemlist(tparams):
 
 
 # dropout
-def dropout_layer(state_before, use_noise, trng):
+# p is the probability of keeping a unit
+def dropout_layer(state_before, use_noise, trng, p=0.5):
     proj = tensor.switch(
         use_noise,
-        state_before * trng.binomial(state_before.shape, p=0.5, n=1,
+        state_before * trng.binomial(state_before.shape, p=p, n=1,
                                      dtype=state_before.dtype),
-        state_before * 0.5)
+        state_before * p)
     return proj
 
 
@@ -2248,15 +2249,21 @@ def build_model(tparams, options):
     emb = tparams['Wemb'][x.flatten()]
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word']])
 
+    # word embedding for backward rnn (source)
+    embr = tparams['Wemb'][xr.flatten()]
+    embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
+
+    if options['kwargs'].get('use_word_dropout', False):
+        emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
+        embr = dropout_layer(embr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
+
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder',
                                             mask=x_mask,
                                             init_state=f_context_emb,
                                             init_memory=f_init_memory,
                                             sc=context_emb)
-    # word embedding for backward rnn (source)
-    embr = tparams['Wemb'][xr.flatten()]
-    embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
+
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
                                              prefix='encoder_r',
                                              mask=xr_mask,
@@ -2319,7 +2326,7 @@ def build_model(tparams, options):
                                    prefix='ff_logit_sc', activ='linear')
     logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
     if options['use_dropout']:
-        logit = dropout_layer(logit, use_noise, trng)
+        logit = dropout_layer(logit, use_noise, trng, p=1.0-options['kwargs'].get('use_dropout_p', 0.5))
     logit = get_layer('ff')[1](tparams, logit, options, 
                                prefix='ff_logit', activ='linear')
     logit_shp = logit.shape
@@ -2337,7 +2344,7 @@ def build_model(tparams, options):
 
 
 # build a sampler
-def build_sampler(tparams, options, trng):
+def build_sampler(tparams, options, trng, use_noise=None):
     x = tensor.matrix('x', dtype='int64')
     xc = tensor.matrix('xc', dtype='int64')
 
@@ -2368,6 +2375,10 @@ def build_sampler(tparams, options, trng):
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word']])
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
+
+    if options['kwargs'].get('use_word_dropout', False):
+        emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
+        embr = dropout_layer(embr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
 
     # encoder
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
@@ -2429,12 +2440,14 @@ def build_sampler(tparams, options, trng):
                                     prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
-    print logit_ctx.ndim
+    #print logit_ctx.ndim
     logit_sc = get_layer('ff')[1](tparams, context_emb, options,
                                    prefix='ff_logit_sc', activ='linear')
-    print logit_sc.ndim
+    #print logit_sc.ndim
     #ipdb.set_trace()
     logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
+    if options['use_dropout']:
+        logit = dropout_layer(logit, use_noise, trng, p=1.0-options['kwargs'].get('use_dropout_p', 0.5))
     logit = get_layer('ff')[1](tparams, logit, options,
                                prefix='ff_logit', activ='linear')
 
@@ -2818,7 +2831,7 @@ def train(rng=123,
     inps = [x, x_mask, y, y_mask, xc, xc_mask]
 
     print 'Building sampler'
-    f_init, f_next = build_sampler(tparams, model_options, trng)
+    f_init, f_next = build_sampler(tparams, model_options, trng, use_noise)
 
     # before any regularizer
     print 'Building f_log_probs...',
