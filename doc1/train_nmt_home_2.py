@@ -53,6 +53,6 @@ if __name__ == '__main__':
         'optimizer': ['adadelta'],
         'decay-c': [0.], 
         'clip-c': [1.], 
-        'use-dropout': [True],
+        'use-dropout': [False],
         'learning-rate': [0.0001],
         'reload': [False]})
