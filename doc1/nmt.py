@@ -2808,7 +2808,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
 
     return numpy.array(probs)
 
-def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng, multibleu, maxlen=100, verbose=True):
+def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng, multibleu, fname, maxlen=100, verbose=True):
     n_done = 0
     full_samples = numpy.zeros((0, maxlen), dtype=numpy.float32)
 
@@ -2829,8 +2829,7 @@ def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_
         if verbose:
             print >>sys.stderr, '%d samples computed' % (n_done)
 
-    tmp_file = options['kwargs'].get('tmp_file', 'tmp_file.txt')
-    with open(tmp_file, 'w') as f:
+    with open(fname, 'w') as f:
         for ii in xrange(len(full_samples)):
             sentence = []
             for vv in full_samples[ii]:
@@ -2845,7 +2844,7 @@ def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_
             f.write(sentence + '\n')
 
     pipe = subprocess.Popen(["perl", multibleu, reference], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    with open(tmp_file) as f:
+    with open(fname) as f:
         pipe.stdin.write(f.read())
     pipe.stdin.close()
     out = pipe.stdout.read()
@@ -3038,6 +3037,11 @@ def train(rng=123,
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=valid_batch_size,
                          maxlen=2000)
+    valid_noshuf = TextIterator(valid_datasets[0], valid_datasets[1], valid_datasets[2],
+                         dictionaries[0], dictionaries[1],
+                         n_words_source=n_words_src, n_words_target=n_words,
+                         batch_size=valid_batch_size,
+                         maxlen=2000, shuffle=False)
 
     if 'other_datasets' in kwargs:
         other = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1], kwargs['other_datasets'][2],
@@ -3045,7 +3049,11 @@ def train(rng=123,
                              n_words_source=n_words_src, n_words_target=n_words,
                              batch_size=valid_batch_size,
                              maxlen=2000)
-
+        other_noshuf = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1], kwargs['other_datasets'][2],
+                             dictionaries[0], dictionaries[1],
+                             n_words_source=n_words_src, n_words_target=n_words,
+                             batch_size=valid_batch_size,
+                             maxlen=2000, shuffle=False)
     print 'Building model'
     params = init_params(model_options)
     # reload parameters
@@ -3239,8 +3247,8 @@ def train(rng=123,
                 use_noise.set_value(0.)
 
                 try:
-                    valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                           "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", verbose=False)
+                    valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
+                           "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname='output/valid_output.'+str(uidx),verbose=False)
                 except:
                     valid_out = ''
                     valid_bleu = 0.0
@@ -3270,8 +3278,8 @@ def train(rng=123,
                                             model_options, other, verbose=False)
                     other_err = other_errs.mean()
                     try:
-                        other_out, other_bleu = greedy_decoding(model_options, kwargs['other_datasets'][3], other, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                               "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", verbose=False)
+                        other_out, other_bleu = greedy_decoding(model_options, kwargs['other_datasets'][3], other_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
+                               "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname='output/other_output'+str(uidx), verbose=False)
                     except:
                         other_out = ''
                         other_bleu = 0.0
