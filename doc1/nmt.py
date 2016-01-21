@@ -3237,21 +3237,30 @@ def train(rng=123,
             # validate model on validation set and early stop if necessary
             if numpy.mod(uidx, validFreq) == 0:
                 use_noise.set_value(0.)
-                valid_errs = pred_probs(f_log_probs, prepare_data,
-                                        model_options, valid, verbose=False)
-                valid_err = valid_errs.mean()
-                history_errs.append(valid_err)
 
-                if uidx == 0 or valid_err <= numpy.array(history_errs).min():
+                try:
+                    valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
+                           "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", verbose=False)
+                except:
+                    valid_out = ''
+                    valid_bleu = 0.0
+
+                history_errs.append(valid_bleu)
+
+                if uidx == 0 or valid_bleu >= numpy.array(history_errs).max():
                     best_p = unzip(tparams)
                     bad_counter = 0
-                if len(history_errs) > patience and valid_err >= \
-                        numpy.array(history_errs)[:-patience].min():
+                if len(history_errs) > patience and valid_bleu <= \
+                        numpy.array(history_errs)[:-patience].max():
                     bad_counter += 1
                     if bad_counter > patience:
                         print 'Early Stop!'
                         estop = True
                         break
+
+                valid_errs = pred_probs(f_log_probs, prepare_data,
+                                        model_options, valid, verbose=False)
+                valid_err = valid_errs.mean()
 
                 if numpy.isnan(valid_err):
                     ipdb.set_trace()
@@ -3260,17 +3269,22 @@ def train(rng=123,
                     other_errs = pred_probs(f_log_probs, prepare_data,
                                             model_options, other, verbose=False)
                     other_err = other_errs.mean()
+                    try:
+                        other_out, other_bleu = greedy_decoding(model_options, kwargs['other_datasets'][3], other, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
+                               "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", verbose=False)
+                    except:
+                        other_out = ''
+                        other_bleu = 0.0
 
-                print 'Other ', other_err
-                print 'Valid ', valid_err
-
-                try:
-                    out, bleu = greedy_decoding(model_options, valid_datasets[3], valid, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                           "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", verbose=False)
-                except:
-                    out = ''
-                    bleu = 0.0
-                print out, bleu
+                    print 'Other ', other_err
+                    print 'Valid ', valid_err
+                    print 'Other BLEU', other_out,
+                    print 'Valid BLEU', valid_out,
+                    print 'Best valid BLEU', numpy.array(history_errs).max()
+                else:
+                    print 'Valid ', valid_err
+                    print 'Valid BLEU', valid_out
+                    print 'Best valid BLEU', numpy.array(history_errs).max()
 
             # finish after this many updates
             if uidx >= finish_after:
