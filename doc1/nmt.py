@@ -2602,6 +2602,182 @@ def gen_sample(tparams, f_init, f_next, x, xc, options, trng=None, k=1, maxlen=3
 
     return sample, sample_score
 
+########
+
+# Batch greedy sampler
+# build a sampler
+def build_sampler_2(tparams, options, trng, use_noise=None):
+    x = tensor.matrix('x', dtype='int64')
+    x_mask = tensor.matrix('x_mask', dtype='float32')
+    xc = tensor.matrix('xc', dtype='int64')
+    xc_mask = tensor.matrix('xc_mask', dtype='float32')
+
+    xr = x[::-1]
+    xr_mask = x_mask[::-1]
+
+    n_timesteps = x.shape[0]
+    n_samples = x.shape[1]
+    n_timesteps_context = xc.shape[0]
+
+    context_emb = tparams['Wemb'][xc.flatten()]
+    context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
+
+    #context_emb = context_emb.mean(0) # Will probably crash here for no context # FIXME
+    context_emb = (context_emb * xc_mask[:,:,None]).sum(0) / tensor.clip(xc_mask.sum(0), 1.0, numpy.inf)[:, None] # n_samples x options['dim_word'], n_samples x 1
+
+    if options['kwargs'].get('use_sc_dropout', False):
+        context_emb = dropout_layer(context_emb, use_noise, trng, p=1.0-options['kwargs'].get('use_sc_dropout_p', 0.5))
+
+    f_context_emb = get_layer('ff')[1](tparams, context_emb, options,
+                                    prefix='f_context_emb', activ='tanh')
+    r_context_emb = get_layer('ff')[1](tparams, context_emb, options,
+                                    prefix='r_context_emb', activ='tanh')
+
+    f_init_memory = None
+    r_init_memory = None
+    if options['encoder'].startswith('lstm'):
+        f_init_memory = get_layer('ff')[1](tparams, context_emb, options,
+                        prefix='f_init_memory', activ='tanh')
+        r_init_memory = get_layer('ff')[1](tparams, context_emb, options,
+                        prefix='r_init_memory', activ='tanh')
+
+    # word embedding (source), forward and backward
+    emb = tparams['Wemb'][x.flatten()]
+    emb = emb.reshape([n_timesteps, n_samples, options['dim_word']])
+    embr = tparams['Wemb'][xr.flatten()]
+    embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
+
+    if options['kwargs'].get('use_word_dropout', False):
+        emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
+        embr = dropout_layer(embr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
+
+    # encoder
+    proj = get_layer(options['encoder'])[1](tparams, emb, options,
+                                            prefix='encoder', mask=x_mask, init_state=f_context_emb,
+                                            init_memory=f_init_memory, sc=context_emb)
+    projr = get_layer(options['encoder'])[1](tparams, embr, options,
+                                             prefix='encoder_r', mask=xr_mask, init_state=r_context_emb,
+                                             init_memory=r_init_memory, sc=context_emb)
+
+    # concatenate forward and backward rnn hidden states
+    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
+
+    # get the input for decoder rnn initializer mlp
+    #ctx_mean = ctx.mean(0)
+    ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
+
+    # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
+    init_state = get_layer('ff')[1](tparams, ctx_mean, options,
+                                    prefix='ff_state', activ='tanh')
+    if options['decoder'].startswith('lstm'):
+        init_memory = get_layer('ff')[1](tparams, ctx_mean, options,
+                                        prefix='ff_cell', activ='tanh')
+    print 'Building f_init...',
+    if options['decoder'].startswith('lstm'):
+        outs = [init_state, ctx, context_emb, init_memory]
+    else:
+        outs = [init_state, ctx, context_emb]
+    f_init_2 = theano.function([x, xc, x_mask, xc_mask], outs, name='f_init_2', profile=profile)
+    print 'Done'
+
+    y = tensor.vector('y_sampler', dtype='int64')
+    init_state = tensor.matrix('init_state', dtype='float32')
+
+    # if it's the first word, emb should be all zero and it is indicated by -1
+    emb = tensor.switch(y[:, None] < 0,
+                        tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
+                        tparams['Wemb_dec'][y])
+
+    if not options['decoder'].startswith('lstm'):
+        init_memory = None
+    # apply one step of conditional gru with attention
+    proj = get_layer(options['decoder'])[1](tparams, emb, options,
+                                            prefix='decoder',
+                                            mask=None, context=ctx, context_mask=x_mask,
+                                            one_step=True,
+                                            init_state=init_state,
+                                            init_memory=init_memory,
+                                            sc=context_emb)
+    # get the next hidden state
+    next_state = proj[0]
+    if options['decoder'].startswith('lstm'):
+        next_memory = proj[3]
+
+    # get the weighted averages of context for this target word y
+    ctxs = proj[1]
+
+    logit_lstm = get_layer('ff')[1](tparams, next_state, options,
+                                    prefix='ff_logit_lstm', activ='linear')
+    logit_prev = get_layer('ff')[1](tparams, emb, options,
+                                    prefix='ff_logit_prev', activ='linear')
+    logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
+                                   prefix='ff_logit_ctx', activ='linear')
+    #print logit_ctx.ndim
+    logit_sc = get_layer('ff')[1](tparams, context_emb, options,
+                                   prefix='ff_logit_sc', activ='linear')
+    #print logit_sc.ndim
+    #ipdb.set_trace()
+    logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
+    if options['use_dropout']:
+        logit = dropout_layer(logit, use_noise, trng, p=1.0-options['kwargs'].get('use_dropout_p', 0.5))
+    logit = get_layer('ff')[1](tparams, logit, options,
+                               prefix='ff_logit', activ='linear')
+
+    # compute the softmax probability
+    next_probs = tensor.nnet.softmax(logit)
+
+    # sample from softmax distribution to get the sample
+    next_sample = trng.multinomial(pvals=next_probs).argmax(1)
+
+    # compile a function to do the whole thing above, next word probability,
+    # sampled word for the next target, next hidden state to be used
+    print 'Building f_next..',
+    if options['decoder'].startswith('lstm'):
+        inps = [y, ctx, init_state, context_emb, init_memory, x_mask]
+        outs = [next_probs, next_sample, next_state, next_memory]
+    else:
+        inps = [y, ctx, init_state, context_emb, x_mask]
+        outs = [next_probs, next_sample, next_state]
+    f_next_2 = theano.function(inps, outs, name='f_next_2', profile=profile)
+    print 'Done'
+
+    return f_init_2, f_next_2
+
+def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, options, trng=None, maxlen=30):
+
+    # Always stochastic, always argmax
+
+    sample = []
+
+    # get initial state of decoder rnn and encoder context
+    ret = f_init_2(x, xc, x_mask, xc_mask)
+    if options['decoder'].startswith('lstm'):
+        next_state, ctx, sc, next_memory = ret[0], ret[1], ret[2], ret[3]
+    else:
+        next_state, ctx, sc = ret[0], ret[1], ret[2]
+    next_w = -1 * numpy.ones((x.shape[1],)).astype('int64')  # bos indicator
+
+    for ii in xrange(maxlen):
+        if options['decoder'].startswith('lstm'):
+            inps = [next_w, ctx, next_state, sc, next_memory, x_mask]
+        else:
+            inps = [next_w, ctx, next_state, sc, x_mask]
+        ret = f_next_2(*inps)
+        if options['decoder'].startswith('lstm'):
+            next_p, next_w, next_state, next_memory = ret[0], ret[1], ret[2], ret[3]
+        else:
+            next_p, next_w, next_state = ret[0], ret[1], ret[2]
+        #print next_p.shape, next_w.shape # n_samples x n_words, n_samples
+        sample.append(next_w)
+
+    sample = numpy.asarray(sample)
+    sample = sample.T
+
+    #print sample.shape # n_samples x timesteps
+
+    return sample
+
+########
 
 # calculate the log probablities on a given corpus using translation model
 def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
@@ -2841,6 +3017,8 @@ def train(rng=123,
     print 'Building sampler'
     f_init, f_next = build_sampler(tparams, model_options, trng, use_noise)
 
+    f_init_2, f_next_2 = build_sampler_2(tparams, model_options, trng, use_noise)
+
     # before any regularizer
     print 'Building f_log_probs...',
     f_log_probs = theano.function(inps, cost, profile=profile)
@@ -3031,9 +3209,44 @@ def train(rng=123,
                 if numpy.isnan(valid_err):
                     ipdb.set_trace()
 
+                # Batch greedy sampler
+                #####
+                n_done = 0
+                full_samples = numpy.zeros((0, 100), dtype=numpy.float32)
+
+                for x, y, xc in valid:
+                    n_done += len(x)
+
+                    x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc = prepare_data(x, y, xc,
+                                                        n_words_src=model_options['n_words_src'],
+                                                        n_words=model_options['n_words'])
+
+                    # def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, options, trng=None, maxlen=30):
+                    samples = gen_sample_2(tparams, f_init_2, f_next_2,
+                                               x, xc, x_mask, xc_mask,
+                                               model_options, trng=trng,
+                                               maxlen=100)
+
+                    
+                    full_samples = numpy.vstack((full_samples, samples))
+                    print >>sys.stderr, '%d samples computed' % (n_done)
+                #print full_samples.shape
+
+                for ii in xrange(len(full_samples)):
+                    print ii, '.: ',
+                    for vv in full_samples[ii]:
+                        if vv == 0:
+                            print '\n',
+                            break
+                        if vv in worddicts_r[1]:
+                            print worddicts_r[1][vv],
+                        else:
+                            print 'UNK',
+                #####
+
                 if 'other_datasets' in kwargs:
                     other_errs = pred_probs(f_log_probs, prepare_data,
-                                            model_options, other)
+                                            model_options, other, verbose=False)
                     other_err = other_errs.mean()
 
                 print 'Other ', other_err
