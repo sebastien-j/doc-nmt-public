@@ -15,6 +15,8 @@ import warnings
 import sys
 import time
 
+import subprocess
+
 from collections import OrderedDict
 
 from data_iterator import TextIterator
@@ -2990,14 +2992,14 @@ def train(rng=123,
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=valid_batch_size,
-                         maxlen=maxlen)
+                         maxlen=2000)
 
     if 'other_datasets' in kwargs:
         other = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1], kwargs['other_datasets'][2],
                              dictionaries[0], dictionaries[1],
                              n_words_source=n_words_src, n_words_target=n_words,
                              batch_size=valid_batch_size,
-                             maxlen=maxlen)
+                             maxlen=2000)
 
     print 'Building model'
     params = init_params(model_options)
@@ -3191,7 +3193,7 @@ def train(rng=123,
             if numpy.mod(uidx, validFreq) == 0:
                 use_noise.set_value(0.)
                 valid_errs = pred_probs(f_log_probs, prepare_data,
-                                        model_options, valid)
+                                        model_options, valid, verbose=False)
                 valid_err = valid_errs.mean()
                 history_errs.append(valid_err)
 
@@ -3229,19 +3231,41 @@ def train(rng=123,
 
                     
                     full_samples = numpy.vstack((full_samples, samples))
-                    print >>sys.stderr, '%d samples computed' % (n_done)
-                #print full_samples.shape
+                    #print >>sys.stderr, '%d samples computed' % (n_done)
+                print n_done
 
-                for ii in xrange(len(full_samples)):
-                    print ii, '.: ',
-                    for vv in full_samples[ii]:
-                        if vv == 0:
-                            print '\n',
-                            break
-                        if vv in worddicts_r[1]:
-                            print worddicts_r[1][vv],
-                        else:
-                            print 'UNK',
+                tmp_file = model_options['kwargs'].get('tmp_file', 'tmp_file.txt')
+                nn_done = 0
+                with open(tmp_file, 'w') as f:
+                    for ii in xrange(len(full_samples)):
+                        #print ii, '.: ',
+                        sentence = []
+                        for vv in full_samples[ii]:
+                            if vv == 0:
+                                #print '\n',
+                                break
+                            if vv in worddicts_r[1]:
+                                #print worddicts_r[1][vv],
+                                sentence.append(worddicts_r[1][vv])
+                            else:
+                                #print 'UNK',
+                                sentence.append('UNK')
+                        sentence = ' '.join(sentence)
+                        sentence = sentence.replace('@@ ', '')
+                        f.write(sentence + '\n')
+                        nn_done += 1
+                print nn_done
+
+                reference = valid_datasets[3]
+                print reference, tmp_file
+                pipe = subprocess.Popen(["perl", "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", reference], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+                with open(tmp_file) as f:
+                    pipe.stdin.write(f.read())
+                pipe.stdin.close()
+                out = pipe.stdout.read()
+                bleu = float(out.split()[2][:-1])
+                print out
+                print bleu
                 #####
 
                 if 'other_datasets' in kwargs:
