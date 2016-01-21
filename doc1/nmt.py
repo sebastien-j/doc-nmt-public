@@ -2770,6 +2770,8 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, options, t
         else:
             next_p, next_w, next_state = ret[0], ret[1], ret[2]
         #print next_p.shape, next_w.shape # n_samples x n_words, n_samples
+        # None: next_w was originally chosen randomly (from a multinomial distribution)
+        next_w = next_p.argmax(1)
         sample.append(next_w)
 
     sample = numpy.asarray(sample)
@@ -2806,6 +2808,49 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
 
     return numpy.array(probs)
 
+def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng, multibleu, maxlen=100, verbose=True):
+    n_done = 0
+    full_samples = numpy.zeros((0, maxlen), dtype=numpy.float32)
+
+    for x, y, xc in iterator:
+        n_done += len(x)
+
+        x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc = prepare_data(x, y, xc,
+                                            n_words_src=options['n_words_src'],
+                                            n_words=options['n_words'])
+
+        samples = gen_sample_2(tparams, f_init_2, f_next_2,
+                                   x, xc, x_mask, xc_mask,
+                                   options, trng=trng,
+                                   maxlen=maxlen)
+
+        
+        full_samples = numpy.vstack((full_samples, samples))
+        if verbose:
+            print >>sys.stderr, '%d samples computed' % (n_done)
+
+    tmp_file = options['kwargs'].get('tmp_file', 'tmp_file.txt')
+    with open(tmp_file, 'w') as f:
+        for ii in xrange(len(full_samples)):
+            sentence = []
+            for vv in full_samples[ii]:
+                if vv == 0:
+                    break
+                if vv in worddicts_r[1]:
+                    sentence.append(worddicts_r[1][vv])
+                else:
+                    sentence.append('UNK')
+            sentence = ' '.join(sentence)
+            sentence = sentence.replace('@@ ', '')
+            f.write(sentence + '\n')
+
+    pipe = subprocess.Popen(["perl", multibleu, reference], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    with open(tmp_file) as f:
+        pipe.stdin.write(f.read())
+    pipe.stdin.close()
+    out = pipe.stdout.read()
+    bleu = float(out.split()[2][:-1])
+    return out, bleu
 
 # optimizers
 # name(hyperp, tparams, grads, inputs (list), cost) = f_grad_shared, f_update
@@ -3211,63 +3256,6 @@ def train(rng=123,
                 if numpy.isnan(valid_err):
                     ipdb.set_trace()
 
-                # Batch greedy sampler
-                #####
-                n_done = 0
-                full_samples = numpy.zeros((0, 100), dtype=numpy.float32)
-
-                for x, y, xc in valid:
-                    n_done += len(x)
-
-                    x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc = prepare_data(x, y, xc,
-                                                        n_words_src=model_options['n_words_src'],
-                                                        n_words=model_options['n_words'])
-
-                    # def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, options, trng=None, maxlen=30):
-                    samples = gen_sample_2(tparams, f_init_2, f_next_2,
-                                               x, xc, x_mask, xc_mask,
-                                               model_options, trng=trng,
-                                               maxlen=100)
-
-                    
-                    full_samples = numpy.vstack((full_samples, samples))
-                    #print >>sys.stderr, '%d samples computed' % (n_done)
-                print n_done
-
-                tmp_file = model_options['kwargs'].get('tmp_file', 'tmp_file.txt')
-                nn_done = 0
-                with open(tmp_file, 'w') as f:
-                    for ii in xrange(len(full_samples)):
-                        #print ii, '.: ',
-                        sentence = []
-                        for vv in full_samples[ii]:
-                            if vv == 0:
-                                #print '\n',
-                                break
-                            if vv in worddicts_r[1]:
-                                #print worddicts_r[1][vv],
-                                sentence.append(worddicts_r[1][vv])
-                            else:
-                                #print 'UNK',
-                                sentence.append('UNK')
-                        sentence = ' '.join(sentence)
-                        sentence = sentence.replace('@@ ', '')
-                        f.write(sentence + '\n')
-                        nn_done += 1
-                print nn_done
-
-                reference = valid_datasets[3]
-                print reference, tmp_file
-                pipe = subprocess.Popen(["perl", "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", reference], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-                with open(tmp_file) as f:
-                    pipe.stdin.write(f.read())
-                pipe.stdin.close()
-                out = pipe.stdout.read()
-                bleu = float(out.split()[2][:-1])
-                print out
-                print bleu
-                #####
-
                 if 'other_datasets' in kwargs:
                     other_errs = pred_probs(f_log_probs, prepare_data,
                                             model_options, other, verbose=False)
@@ -3275,6 +3263,14 @@ def train(rng=123,
 
                 print 'Other ', other_err
                 print 'Valid ', valid_err
+
+                try:
+                    out, bleu = greedy_decoding(model_options, valid_datasets[3], valid, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
+                           "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", verbose=False)
+                except:
+                    out = ''
+                    bleu = 0.0
+                print out, bleu
 
             # finish after this many updates
             if uidx >= finish_after:
