@@ -1604,9 +1604,10 @@ def train(rng=123,
 
                 ml = model_options['kwargs'].get('valid_maxlen', 100)
                 valid_fname = model_options['kwargs'].get('valid_output', 'output/valid_output')
+                multibleu = model_options['kwargs'].get('multibleu', "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl")
                 try:
                     valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[2], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                       "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname=valid_fname, maxlen=ml, verbose=True)
+                       multibleu, fname=valid_fname, maxlen=ml, verbose=True)
                 except:
                     valid_out = ''
                     valid_bleu = 0.0
@@ -1638,7 +1639,7 @@ def train(rng=123,
                     other_fname = model_options['kwargs'].get('other_output', 'output/other_output')
                     try:
                         other_out, other_bleu = greedy_decoding(model_options, kwargs['other_datasets'][2], other_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                               "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname=other_fname, maxlen=ml, verbose=False)
+                               multibleu, fname=other_fname, maxlen=ml, verbose=False)
                     except:
                         other_out = ''
                         other_bleu = 0.0
