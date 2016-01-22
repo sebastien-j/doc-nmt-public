@@ -4,6 +4,7 @@ Translates a source file using a translation model.
 import argparse
 
 import numpy
+import theano
 import cPickle as pkl
 
 from nmt import (build_sampler, gen_sample, load_params,
