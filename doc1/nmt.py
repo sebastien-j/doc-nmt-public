@@ -2808,7 +2808,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
 
     return numpy.array(probs)
 
-def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng, multibleu, fname, maxlen=100, verbose=True):
+def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng, multibleu, fname, maxlen=200, verbose=True):
     n_done = 0
     full_samples = numpy.zeros((0, maxlen), dtype=numpy.float32)
 
@@ -3246,9 +3246,11 @@ def train(rng=123,
             if numpy.mod(uidx, validFreq) == 0:
                 use_noise.set_value(0.)
 
+                ml = model_options['kwargs'].get('valid_maxlen', 100)
+                valid_fname = model_options['kwargs'].get('output/valid_output', 100)
                 try:
                     valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                           "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname='output/valid_output.'+str(uidx),verbose=False)
+                           "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname=valid_fname, maxlen=ml, verbose=True)
                 except:
                     valid_out = ''
                     valid_bleu = 0.0
@@ -3267,7 +3269,7 @@ def train(rng=123,
                         break
 
                 valid_errs = pred_probs(f_log_probs, prepare_data,
-                                        model_options, valid, verbose=False)
+                                        model_options, valid, verbose=True)
                 valid_err = valid_errs.mean()
 
                 if numpy.isnan(valid_err):
@@ -3277,9 +3279,10 @@ def train(rng=123,
                     other_errs = pred_probs(f_log_probs, prepare_data,
                                             model_options, other, verbose=False)
                     other_err = other_errs.mean()
+                    other_fname = model_options['kwargs'].get('output/other_output', 100)
                     try:
                         other_out, other_bleu = greedy_decoding(model_options, kwargs['other_datasets'][3], other_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                               "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname='output/other_output'+str(uidx), verbose=False)
+                               "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname=other_fname, maxlen=ml, verbose=False)
                     except:
                         other_out = ''
                         other_bleu = 0.0

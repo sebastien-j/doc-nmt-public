@@ -21,7 +21,7 @@ def main(job_id, params):
                      valid_batch_size=32,
                      validFreq=1000,
                      dispFreq=100,
-                     saveFreq=2000,
+                     saveFreq=1000,
                      sampleFreq=10000,
                      datasets=['/home/sebastien/Documents/WIT3/en-fr/debug/train.tags.en-fr.en.tok.text.bpe10000.shuf', 
                                '/home/sebastien/Documents/WIT3/en-fr/debug/train.tags.en-fr.fr.tok.text.bpe10000.shuf',
@@ -46,7 +46,7 @@ def main(job_id, params):
 
 if __name__ == '__main__':
     main(0, {
-        'model': ['/home/sebastien/Documents/WIT3/en-fr/models/debug_model.2a.npz'],
+        'model': ['/home/sebastien/Documents/WIT3/en-fr/models/debug_model.2b.npz'],
         'dim_word': [250],
         'dim': [500],
         'n-words': [10234], 
