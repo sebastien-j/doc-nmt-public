@@ -15,6 +15,8 @@ import warnings
 import sys
 import time
 
+import subprocess
+
 from collections import OrderedDict
 
 from data_iterator import TextIterator
@@ -1015,6 +1017,127 @@ def gen_sample(tparams, f_init, f_next, x, options, trng=None, k=1, maxlen=30,
 
     return sample, sample_score
 
+########
+
+# Batch greedy sampler
+# build a sampler
+def build_sampler_2(tparams, options, trng, use_noise=None):
+    x = tensor.matrix('x', dtype='int64')
+    x_mask = tensor.matrix('x_mask', dtype='float32')
+
+    xr = x[::-1]
+    xr_mask = x_mask[::-1]
+
+    n_timesteps = x.shape[0]
+    n_samples = x.shape[1]
+
+    # word embedding (source), forward and backward
+    emb = tparams['Wemb'][x.flatten()]
+    emb = emb.reshape([n_timesteps, n_samples, options['dim_word']])
+    embr = tparams['Wemb'][xr.flatten()]
+    embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
+
+    if options['kwargs'].get('use_word_dropout', False):
+        emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
+        embr = dropout_layer(embr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
+
+    # encoder
+    proj = get_layer(options['encoder'])[1](tparams, emb, options,
+                                            prefix='encoder', mask=x_mask)
+    projr = get_layer(options['encoder'])[1](tparams, embr, options,
+                                             prefix='encoder_r', mask=xr_mask)
+
+    # concatenate forward and backward rnn hidden states
+    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
+
+    # get the input for decoder rnn initializer mlp
+    #ctx_mean = ctx.mean(0)
+    ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
+
+    # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
+    init_state = get_layer('ff')[1](tparams, ctx_mean, options,
+                                    prefix='ff_state', activ='tanh')
+    print 'Building f_init...',
+    outs = [init_state, ctx]
+    f_init_2 = theano.function([x, x_mask], outs, name='f_init_2', profile=profile)
+    print 'Done'
+
+    y = tensor.vector('y_sampler', dtype='int64')
+    init_state = tensor.matrix('init_state', dtype='float32')
+
+    # if it's the first word, emb should be all zero and it is indicated by -1
+    emb = tensor.switch(y[:, None] < 0,
+                        tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
+                        tparams['Wemb_dec'][y])
+
+    # apply one step of conditional gru with attention
+    proj = get_layer(options['decoder'])[1](tparams, emb, options,
+                                            prefix='decoder',
+                                            mask=None, context=ctx, context_mask=x_mask,
+                                            one_step=True,
+                                            init_state=init_state)
+    # get the next hidden state
+    next_state = proj[0]
+
+    # get the weighted averages of context for this target word y
+    ctxs = proj[1]
+
+    logit_lstm = get_layer('ff')[1](tparams, next_state, options,
+                                    prefix='ff_logit_lstm', activ='linear')
+    logit_prev = get_layer('ff')[1](tparams, emb, options,
+                                    prefix='ff_logit_prev', activ='linear')
+    logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
+                                   prefix='ff_logit_ctx', activ='linear')
+    logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx)
+    if options['use_dropout']:
+        logit = dropout_layer(logit, use_noise, trng, p=1.0-options['kwargs'].get('use_dropout_p', 0.5))
+    logit = get_layer('ff')[1](tparams, logit, options,
+                               prefix='ff_logit', activ='linear')
+
+    # compute the softmax probability
+    next_probs = tensor.nnet.softmax(logit)
+
+    # sample from softmax distribution to get the sample
+    next_sample = trng.multinomial(pvals=next_probs).argmax(1)
+
+    # compile a function to do the whole thing above, next word probability,
+    # sampled word for the next target, next hidden state to be used
+    print 'Building f_next..',
+    inps = [y, ctx, init_state, x_mask]
+    outs = [next_probs, next_sample, next_state]
+    f_next_2 = theano.function(inps, outs, name='f_next_2', profile=profile)
+    print 'Done'
+
+    return f_init_2, f_next_2
+
+def gen_sample_2(tparams, f_init_2, f_next_2, x, x_mask, options, trng=None, maxlen=30):
+
+    # Always stochastic, always argmax
+
+    sample = []
+
+    # get initial state of decoder rnn and encoder context
+    ret = f_init_2(x, x_mask)
+    next_state, ctx = ret[0], ret[1]
+    next_w = -1 * numpy.ones((x.shape[1],)).astype('int64')  # bos indicator
+
+    for ii in xrange(maxlen):
+        inps = [next_w, ctx, next_state, x_mask]
+        ret = f_next_2(*inps)
+        next_p, next_w, next_state = ret[0], ret[1], ret[2]
+        #print next_p.shape, next_w.shape # n_samples x n_words, n_samples
+        # None: next_w was originally chosen randomly (from a multinomial distribution)
+        next_w = next_p.argmax(1)
+        sample.append(next_w)
+
+    sample = numpy.asarray(sample)
+    sample = sample.T
+
+    #print sample.shape # n_samples x timesteps
+
+    return sample
+
+########
 
 # calculate the log probablities on a given corpus using translation model
 def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
@@ -1041,6 +1164,48 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
 
     return numpy.array(probs)
 
+def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng, multibleu, fname, maxlen=200, verbose=True):
+    n_done = 0
+    full_samples = numpy.zeros((0, maxlen), dtype=numpy.float32)
+
+    for x, y in iterator:
+        n_done += len(x)
+
+        x, x_mask, y, y_mask  = prepare_data(x, y,
+                                            n_words_src=options['n_words_src'],
+                                            n_words=options['n_words'])
+
+        samples = gen_sample_2(tparams, f_init_2, f_next_2,
+                                   x, x_mask,
+                                   options, trng=trng,
+                                   maxlen=maxlen)
+
+        
+        full_samples = numpy.vstack((full_samples, samples))
+        if verbose:
+            print >>sys.stderr, '%d samples computed' % (n_done)
+
+    with open(fname, 'w') as f:
+        for ii in xrange(len(full_samples)):
+            sentence = []
+            for vv in full_samples[ii]:
+                if vv == 0:
+                    break
+                if vv in worddicts_r[1]:
+                    sentence.append(worddicts_r[1][vv])
+                else:
+                    sentence.append('UNK')
+            sentence = ' '.join(sentence)
+            sentence = sentence.replace('@@ ', '')
+            f.write(sentence + '\n')
+
+    pipe = subprocess.Popen(["perl", multibleu, reference], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    with open(fname) as f:
+        pipe.stdin.write(f.read())
+    pipe.stdin.close()
+    out = pipe.stdout.read()
+    bleu = float(out.split()[2][:-1])
+    return out, bleu
 
 # optimizers
 # name(hyperp, tparams, grads, inputs (list), cost) = f_grad_shared, f_update
@@ -1227,14 +1392,24 @@ def train(rng=123,
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=valid_batch_size,
-                         maxlen=maxlen)
+                         maxlen=2000)
+    valid_noshuf = TextIterator(valid_datasets[0], valid_datasets[1],
+                         dictionaries[0], dictionaries[1],
+                         n_words_source=n_words_src, n_words_target=n_words,
+                         batch_size=valid_batch_size,
+                         maxlen=2000, shuffle=False)
 
     if 'other_datasets' in kwargs:
         other = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1],
                              dictionaries[0], dictionaries[1],
                              n_words_source=n_words_src, n_words_target=n_words,
                              batch_size=valid_batch_size,
-                             maxlen=maxlen)
+                             maxlen=2000)
+        other_noshuf = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1],
+                             dictionaries[0], dictionaries[1],
+                             n_words_source=n_words_src, n_words_target=n_words,
+                             batch_size=valid_batch_size,
+                             maxlen=2000, shuffle=False)
 
     print 'Building model'
     params = init_params(model_options)
@@ -1253,6 +1428,7 @@ def train(rng=123,
 
     print 'Building sampler'
     f_init, f_next = build_sampler(tparams, model_options, trng, use_noise)
+    f_init_2, f_next_2 = build_sampler_2(tparams, model_options, trng, use_noise)
 
     # before any regularizer
     print 'Building f_log_probs...',
@@ -1425,32 +1601,57 @@ def train(rng=123,
             # validate model on validation set and early stop if necessary
             if numpy.mod(uidx, validFreq) == 0:
                 use_noise.set_value(0.)
-                valid_errs = pred_probs(f_log_probs, prepare_data,
-                                        model_options, valid)
-                valid_err = valid_errs.mean()
-                history_errs.append(valid_err)
 
-                if uidx == 0 or valid_err <= numpy.array(history_errs).min():
+                ml = model_options['kwargs'].get('valid_maxlen', 100)
+                valid_fname = model_options['kwargs'].get('valid_output', 'output/valid_output')
+                try:
+                    valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[2], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
+                       "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname=valid_fname, maxlen=ml, verbose=True)
+                except:
+                    valid_out = ''
+                    valid_bleu = 0.0
+
+                history_errs.append(valid_bleu)
+
+                if uidx == 0 or valid_bleu >= numpy.array(history_errs).max():
                     best_p = unzip(tparams)
                     bad_counter = 0
-                if len(history_errs) > patience and valid_err >= \
-                        numpy.array(history_errs)[:-patience].min():
+                if len(history_errs) > patience and valid_bleu <= \
+                        numpy.array(history_errs)[:-patience].max():
                     bad_counter += 1
                     if bad_counter > patience:
                         print 'Early Stop!'
                         estop = True
                         break
 
+                valid_errs = pred_probs(f_log_probs, prepare_data,
+                                        model_options, valid, verbose=True)
+                valid_err = valid_errs.mean()
+
                 if numpy.isnan(valid_err):
                     ipdb.set_trace()
 
                 if 'other_datasets' in kwargs:
                     other_errs = pred_probs(f_log_probs, prepare_data,
-                                            model_options, other)
+                                            model_options, other, verbose=False)
                     other_err = other_errs.mean()
+                    other_fname = model_options['kwargs'].get('other_output', 'output/other_output')
+                    try:
+                        other_out, other_bleu = greedy_decoding(model_options, kwargs['other_datasets'][2], other_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
+                               "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl", fname=other_fname, maxlen=ml, verbose=False)
+                    except:
+                        other_out = ''
+                        other_bleu = 0.0
 
-                print 'Other ', other_err
-                print 'Valid ', valid_err
+                    print 'Other ', other_err
+                    print 'Valid ', valid_err
+                    print 'Other BLEU', other_out,
+                    print 'Valid BLEU', valid_out,
+                    print 'Best valid BLEU', numpy.array(history_errs).max()
+                else:
+                    print 'Valid ', valid_err
+                    print 'Valid BLEU', valid_out
+                    print 'Best valid BLEU', numpy.array(history_errs).max()
 
             # finish after this many updates
             if uidx >= finish_after:

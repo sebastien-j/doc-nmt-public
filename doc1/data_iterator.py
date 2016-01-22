@@ -17,7 +17,8 @@ class TextIterator:
                  batch_size=128,
                  maxlen=100,
                  n_words_source=-1,
-                 n_words_target=-1):
+                 n_words_target=-1,
+                 shuffle=True):
         self.source = fopen(source, 'r')
         self.target = fopen(target, 'r')
         self.source_context = fopen(source_context, 'r')
@@ -39,6 +40,7 @@ class TextIterator:
         self.k = batch_size * 20
 
         self.end_of_data = False
+        self.shuffle = shuffle
 
     def __iter__(self):
         return self
@@ -78,8 +80,11 @@ class TextIterator:
                 self.source_context_buffer.append(cc.strip().split())
 
             # sort by target buffer
-            tlen = numpy.array([len(t) for t in self.target_buffer])
-            tidx = tlen.argsort()
+            if self.shuffle:
+                tlen = numpy.array([len(t) for t in self.target_buffer])
+                tidx = tlen.argsort()
+            else:
+                tidx = range(len(self.target_buffer))[::-1]
 
             _sbuf = [self.source_buffer[i] for i in tidx]
             _tbuf = [self.target_buffer[i] for i in tidx]
