@@ -1036,6 +1036,7 @@ def build_model(tparams, options):
     emb_shifted = tensor.zeros_like(emb)
     emb_shifted = tensor.set_subtensor(emb_shifted[1:], emb[:-1])
     emb = emb_shifted
+    emb_copy = emb
 
     if options['kwargs'].get('use_dec_word_dropout', False):
         emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_dec_word_dropout_p', 0.5))
@@ -1059,7 +1060,7 @@ def build_model(tparams, options):
     # compute word probabilities
     logit_lstm = get_layer('ff')[1](tparams, proj_h, options,
                                     prefix='ff_logit_lstm', activ='linear')
-    logit_prev = get_layer('ff')[1](tparams, emb, options,
+    logit_prev = get_layer('ff')[1](tparams, emb_copy, options,
                                     prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
@@ -1132,6 +1133,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
     emb = tensor.switch(y[:, None] < 0,
                         tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
                         tparams['Wemb_dec'][y])
+    emb_copy = emb
     if options['kwargs'].get('use_dec_word_dropout', False):
         emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_dec_word_dropout_p', 0.5))
 
@@ -1154,7 +1156,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
 
     logit_lstm = get_layer('ff')[1](tparams, next_state, options,
                                     prefix='ff_logit_lstm', activ='linear')
-    logit_prev = get_layer('ff')[1](tparams, emb, options,
+    logit_prev = get_layer('ff')[1](tparams, emb_copy, options,
                                     prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
@@ -1361,6 +1363,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     emb = tensor.switch(y[:, None] < 0,
                         tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
                         tparams['Wemb_dec'][y])
+    emb_copy = emb
     if options['kwargs'].get('use_dec_word_dropout', False):
         emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_dec_word_dropout_p', 0.5))
 
@@ -1383,7 +1386,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
 
     logit_lstm = get_layer('ff')[1](tparams, next_state, options,
                                     prefix='ff_logit_lstm', activ='linear')
-    logit_prev = get_layer('ff')[1](tparams, emb, options,
+    logit_prev = get_layer('ff')[1](tparams, emb_copy, options,
                                     prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
