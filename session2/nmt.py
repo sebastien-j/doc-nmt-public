@@ -1037,6 +1037,8 @@ def build_model(tparams, options):
     emb_shifted = tensor.set_subtensor(emb_shifted[1:], emb[:-1])
     emb = emb_shifted
 
+    if options['kwargs'].get('use_dec_word_dropout', False):
+        emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_dec_word_dropout_p', 0.5))
     # decoder - pass through the decoder conditional gru with attention
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
                                             prefix='decoder',
@@ -1130,6 +1132,8 @@ def build_sampler(tparams, options, trng, use_noise=None):
     emb = tensor.switch(y[:, None] < 0,
                         tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
                         tparams['Wemb_dec'][y])
+    if options['kwargs'].get('use_dec_word_dropout', False):
+        emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_dec_word_dropout_p', 0.5))
 
     if not options['decoder'].startswith('lstm'):
         init_memory = None
@@ -1357,6 +1361,8 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     emb = tensor.switch(y[:, None] < 0,
                         tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
                         tparams['Wemb_dec'][y])
+    if options['kwargs'].get('use_dec_word_dropout', False):
+        emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_dec_word_dropout_p', 0.5))
 
     if not options['decoder'].startswith('lstm'):
         init_memory = None
