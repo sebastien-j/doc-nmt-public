@@ -40,15 +40,15 @@ def main(job_id, params):
                      rng=1234,
                      trng=1234,
                      save_inter=True,
-                     encoder='lstm_late_sc',
-                     decoder='lstm_cond_legacy_late_sc',
-                     valid_output='output/valid_output.5a',
-                     other_output='output/other_output.5a')
+                     encoder='lstm',
+                     decoder='lstm_cond_legacy',
+                     valid_output='output/valid_output.6',
+                     other_output='output/other_output.6')
     return validerr
 
 if __name__ == '__main__':
     main(0, {
-        'model': ['/misc/kcgscratch1/WIT3/en-fr/models/debug_model.5a.npz'],
+        'model': ['/misc/kcgscratch1/WIT3/en-fr/models/debug_model.6.npz'],
         'dim_word': [250],
         'dim': [500],
         'n-words': [10234], 

@@ -21,8 +21,8 @@ def main(job_id, params):
                      valid_batch_size=64,
                      validFreq=1000,
                      dispFreq=100,
-                     saveFreq=2000,
-                     sampleFreq=500,
+                     saveFreq=1000,
+                     sampleFreq=5000,
                      datasets=['/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.en.tok.text.bpe10000.shuf', 
                                '/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.fr.tok.text.bpe10000.shuf'],
                      valid_datasets=['/misc/kcgscratch1/WIT3/en-fr/debug/IWSLT15.TED.dev2010.en-fr.en.out.xml.tok.text.bpe10000', 
@@ -37,7 +37,9 @@ def main(job_id, params):
                      rng=1234,
                      trng=1234,
                      save_inter=True,
-                     decoder='gru_cond_legacy')
+                     decoder='gru_cond_legacy',
+                     valid_output='output/valid_output.s2.1a',
+                     other_output='output/other_output.s2.1a')
     return validerr
 
 if __name__ == '__main__':

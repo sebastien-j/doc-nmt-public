@@ -36,25 +36,26 @@ def main(job_id, params):
                                '/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.fr.tok.text.first1000'],
                      dictionaries=['/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.en.tok.text.bpe10000.pkl', 
                                    '/misc/kcgscratch1/WIT3/en-fr/debug/train.tags.en-fr.fr.tok.text.bpe10000.pkl'],
-                     use_dropout=params['use-dropout'][0],
                      rng=1234,
                      trng=1234,
                      save_inter=True,
                      encoder='lstm_late_sc',
                      decoder='lstm_cond_legacy_late_sc',
-                     valid_output='output/valid_output.5a',
-                     other_output='output/other_output.5a')
+                     valid_output='output/valid_output.8',
+                     other_output='output/other_output.8',
+                     use_sc_dropout=True,
+                     use_word_dropout=True,
+                     use_dropout=True)
     return validerr
 
 if __name__ == '__main__':
     main(0, {
-        'model': ['/misc/kcgscratch1/WIT3/en-fr/models/debug_model.5a.npz'],
+        'model': ['/misc/kcgscratch1/WIT3/en-fr/models/debug_model.8.npz'],
         'dim_word': [250],
         'dim': [500],
         'n-words': [10234], 
         'optimizer': ['adadelta'],
         'decay-c': [0.], 
         'clip-c': [1.], 
-        'use-dropout': [False],
         'learning-rate': [0.0001],
         'reload': [False]})
