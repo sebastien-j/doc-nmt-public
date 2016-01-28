@@ -19,6 +19,7 @@ def parse_args():
     parser.add_argument("--num-context-left", type=int, default=0, help="Number of sentences on the left")
     parser.add_argument("--num-context-right", type=int, default=0, help="Number of sentences on the right")
     parser.add_argument("--use-middle", action="store_true", default=False, help="Use current sentence as part of context")
+    parser.add_argument("--split-sentences", action="store_true", default=False)
     return parser.parse_args()
 
 def main():
@@ -88,6 +89,9 @@ def main():
         print "Writing source and target context files"
         with open(args.source_context, 'w') as context_f:
             with open(args.target_context, 'w') as context_g:
+                ext = []
+                if args.split_sentences:
+                    ext = ['|||']
                 for ii in xrange(num_docs):
                     doc_len = len(src[ii])
                     assert doc_len == len(trg[ii])
@@ -95,14 +99,17 @@ def main():
                         src_tmp = []
                         trg_tmp = []
                         for kk in xrange(max(0, jj - args.num_context_left), jj):
-                            src_tmp.extend(src[ii][kk])
-                            trg_tmp.extend(trg[ii][kk])
+                            src_tmp.extend(src[ii][kk] + ext)
+                            trg_tmp.extend(trg[ii][kk] + ext)
                         if args.use_middle:
-                            src_tmp.extend(src[ii][jj])
-                            trg_tmp.extend(trg[ii][jj])
+                            src_tmp.extend(src[ii][jj] + ext)
+                            trg_tmp.extend(trg[ii][jj] + ext)
                         for kk in xrange(jj+1, min(doc_len, jj + args.num_context_right + 1)):
-                            src_tmp.extend(src[ii][kk])
-                            trg_tmp.extend(trg[ii][kk])
+                            src_tmp.extend(src[ii][kk] + ext)
+                            trg_tmp.extend(trg[ii][kk] + ext)
+                        if args.split_sentences: # Remove last extension
+                            src_tmp = src_tmp[:-1]
+                            trg_tmp = trg_tmp[:-1]
 
                         context_f.write(" ".join(src_tmp) + '\n')
                         context_g.write(" ".join(trg_tmp) + '\n')
