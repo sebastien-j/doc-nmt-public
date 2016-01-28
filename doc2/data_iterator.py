@@ -42,6 +42,9 @@ class TextIterator:
         self.end_of_data = False
         self.shuffle = shuffle
 
+        assert '|||' not in source_dict
+        self.source_dict['|||'] = 0
+
     def __iter__(self):
         return self
 
@@ -122,11 +125,20 @@ class TextIterator:
                     tt = [w if w < self.n_words_target else 1 for w in tt]
                 
                 # read from source context file and map to word index
-                cc = self.source_context_buffer.pop()
-                cc = [self.source_dict[w] if w in self.source_dict else 1
-                      for w in cc]
+                cc_ = self.source_context_buffer.pop()
+                cc_ = [self.source_dict[w] if w in self.source_dict else 1
+                      for w in cc_]
                 if self.n_words_source > 0:
-                    cc = [w if w < self.n_words_source else 1 for w in cc]
+                    cc_ = [w if w < self.n_words_source else 1 for w in cc_]
+                cc = []
+                tmp = []
+                for word_id in cc_:
+                    if word_id != 0:
+                        tmp.append(word_id)
+                    else:
+                        cc.append(tmp)
+                        tmp = []
+                cc.append(tmp)
 
                 if len(ss) > self.maxlen and len(tt) > self.maxlen:
                     continue
