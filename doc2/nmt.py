@@ -2728,6 +2728,7 @@ def param_init_lstm_cond_v0(options, params, prefix='lstm_cond_v0',
         dim = options['dim']
     if dimctx is None:
         dimctx = options['dim']
+    # In the future, we may want to allow flexibility for the dim of the second context. Now nin.
 
     params = param_init_lstm(options, params, prefix, nin=nin, dim=dim, rng=rng)
 
@@ -2739,28 +2740,28 @@ def param_init_lstm_cond_v0(options, params, prefix='lstm_cond_v0',
     Wi_att = norm_weight(nin, dimctx, rng=rng)
     params[_p(prefix, 'Wi_att')] = Wi_att
 
-    Wi_sc_att = norm_weight(nin, dim, rng=rng)
+    Wi_sc_att = norm_weight(nin, nin, rng=rng)
     params[_p(prefix, 'Wi_sc_att')] = Wi_sc_att
 
     # attention: context -> hidden
     Wc_att = norm_weight(dimctx, rng=rng)
     params[_p(prefix, 'Wc_att')] = Wc_att
 
-    Wc_sc_att = norm_weight(dim, rng=rng)
+    Wc_sc_att = norm_weight(nin, rng=rng)
     params[_p(prefix, 'Wc_sc_att')] = Wc_sc_att
 
     # attention: LSTM -> hidden
     Wd_att = norm_weight(dim, dimctx, rng=rng)
     params[_p(prefix, 'Wd_att')] = Wd_att
 
-    Wd_sc_att = norm_weight(dim, dim, rng=rng)
+    Wd_sc_att = norm_weight(dim, nin, rng=rng)
     params[_p(prefix, 'Wd_sc_att')] = Wd_sc_att
  
     # attention: hidden bias
     b_att = numpy.zeros((dimctx,)).astype('float32')
     params[_p(prefix, 'b_att')] = b_att
 
-    b_sc_att = numpy.zeros((dim,)).astype('float32')
+    b_sc_att = numpy.zeros((nin,)).astype('float32')
     params[_p(prefix, 'b_sc_att')] = b_sc_att
 
     # attention:
@@ -2769,17 +2770,19 @@ def param_init_lstm_cond_v0(options, params, prefix='lstm_cond_v0',
     c_att = numpy.zeros((1,)).astype('float32')
     params[_p(prefix, 'c_tt')] = c_att
 
-    U_sc_att = norm_weight(dim, 1, rng=rng)
+    U_sc_att = norm_weight(nin, 1, rng=rng)
     params[_p(prefix, 'U_sc_att')] = U_sc_att
     c_sc_att = numpy.zeros((1,)).astype('float32')
     params[_p(prefix, 'c_sc_tt')] = c_sc_att
 
-    Wr = norm_weight(dim, dim, rng=rng)
+    Wr = norm_weight(nin, dim, rng=rng)
     params[_p(prefix, 'Wr')] = Wr
     Wrr = norm_weight(dim, dim, rng=rng)
     params[_p(prefix, 'Wrr')] = Wrr
     params[_p(prefix,'br')] = numpy.zeros((dim,)).astype('float32')
 
+    Ws = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Ws')] = Ws
     return params
 
 def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
@@ -2822,7 +2825,7 @@ def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
         tparams[_p(prefix, 'b_att')]
     sc_pctx_ = tensor.dot(sc, tparams[_p(prefix, 'Wc_sc_att')]) + \
         tparams[_p(prefix, 'b_sc_att')]
-
+    
     def _slice(_x, n, dim):
         if _x.ndim == 3:
             return _x[:, :, n*dim:(n+1)*dim]
@@ -2838,7 +2841,7 @@ def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
     # step function to be used by scan
     # arguments    | sequences      |  outputs-info   | non-seqs ...
     def _step_slice(m_, x_, xc_, xsc_, h_, ctx_, alpha_, c_, tsc, sc_alpha_, pctx_, cc_, sc_pctx_, sc_cc_,
-                    U, Wc, Wd_att, Wd_sc_att, U_att, U_sc_att, c_tt, c_sc_tt, Wr, Wrr, br):
+                    U, Wc, Wd_att, Wd_sc_att, U_att, U_sc_att, c_tt, c_sc_tt, Wr, Wrr, br, Ws):
 
         # Compute attention separately
 
@@ -2867,7 +2870,7 @@ def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
         sc_pstate_ = tensor.dot(h_, Wd_sc_att)
 
         # add projected context
-        sc_pctx__ = sc_pctx_ + pstate_[None, :, :]
+        sc_pctx__ = sc_pctx_ + sc_pstate_[None, :, :]
 
         # add projected previous output
         sc_pctx__ += xsc_
@@ -2875,8 +2878,8 @@ def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
 
         # compute alignment weights
         sc_alpha = tensor.dot(sc_pctx__, U_sc_att)+c_sc_tt
-        sc_alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
-        sc_alpha = tensor.exp(alpha)
+        sc_alpha = sc_alpha.reshape([sc_alpha.shape[0], sc_alpha.shape[1]])
+        sc_alpha = tensor.exp(sc_alpha)
         sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
@@ -2898,7 +2901,7 @@ def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
 
         r = tensor.nnet.sigmoid(tensor.dot(tsc, Wr) + tensor.dot(c, Wrr) + br)
 
-        h = o * tensor.tanh(c + r * tsc)
+        h = o * tensor.tanh(c + r * tensor.dot(tsc, Ws))
         h = m_[:, None] * h + (1. - m_)[:, None] * h_
 
         return h, ctx_, alpha.T, c, tsc, sc_alpha.T
@@ -2916,7 +2919,8 @@ def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
                    tparams[_p(prefix, 'c_sc_tt')],
                    tparams[_p(prefix, 'Wr')],
                    tparams[_p(prefix, 'Wrr')],
-                   tparams[_p(prefix, 'br')]]
+                   tparams[_p(prefix, 'br')],
+                   tparams[_p(prefix, 'Ws')]]
 
     if one_step:
         rval = _step(*(
