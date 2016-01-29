@@ -2949,22 +2949,6 @@ def init_params(options):
     params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
     params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word'], rng=rng)
 
-    params = get_layer('ff')[0](options, params, prefix='f_context_emb',
-                                nin=options['dim_word'], nout=options['dim'],
-                                ortho=False, rng=rng)
-
-    params = get_layer('ff')[0](options, params, prefix='r_context_emb',
-                                nin=options['dim_word'], nout=options['dim'],
-                                ortho=False, rng=rng)
-
-    if options['encoder'].startswith('lstm'):
-        params = get_layer('ff')[0](options, params, prefix='f_init_memory',
-                                    nin=options['dim_word'], nout=options['dim'],
-                                    ortho=False, rng=rng)
-
-        params = get_layer('ff')[0](options, params, prefix='r_init_memory',
-                                    nin=options['dim_word'], nout=options['dim'],
-                                    ortho=False, rng=rng)
     # encoder: bidirectional RNN
     params = get_layer(options['encoder'])[0](options, params,
                                               prefix='encoder',
@@ -3402,37 +3386,27 @@ def gen_sample(tparams, f_init, f_next, x, xc, xc_mask, xc_mask_2, xc_mask_3, op
 def build_sampler_2(tparams, options, trng, use_noise=None):
     x = tensor.matrix('x', dtype='int64')
     x_mask = tensor.matrix('x_mask', dtype='float32')
-    xc = tensor.matrix('xc', dtype='int64')
-    xc_mask = tensor.matrix('xc_mask', dtype='float32')
+    xc = tensor.tensor3('xc', dtype='int64')
+    xc_mask = tensor.tensor3('xc_mask', dtype='float32')
+    xc_mask_2 = tensor.matrix('xc_mask_2', dtype='float32')
+    xc_mask_3 = tensor.matrix('xc_mask_3', dtype='float32')
 
+    # for the backward rnn, we just need to invert x and x_mask
     xr = x[::-1]
     xr_mask = x_mask[::-1]
 
     n_timesteps = x.shape[0]
-    n_samples = x.shape[1]
     n_timesteps_context = xc.shape[0]
+    max_words = xc.shape[2]
+    n_samples = x.shape[1]
 
     context_emb = tparams['Wemb'][xc.flatten()]
-    context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
+    context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
-    #context_emb = context_emb.mean(0) # Will probably crash here for no context # FIXME
-    context_emb = (context_emb * xc_mask[:,:,None]).sum(0) / tensor.clip(xc_mask.sum(0), 1.0, numpy.inf)[:, None] # n_samples x options['dim_word'], n_samples x 1
+    context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
     if options['kwargs'].get('use_sc_dropout', False):
         context_emb = dropout_layer(context_emb, use_noise, trng, p=1.0-options['kwargs'].get('use_sc_dropout_p', 0.5))
-
-    f_context_emb = get_layer('ff')[1](tparams, context_emb, options,
-                                    prefix='f_context_emb', activ='tanh')
-    r_context_emb = get_layer('ff')[1](tparams, context_emb, options,
-                                    prefix='r_context_emb', activ='tanh')
-
-    f_init_memory = None
-    r_init_memory = None
-    if options['encoder'].startswith('lstm'):
-        f_init_memory = get_layer('ff')[1](tparams, context_emb, options,
-                        prefix='f_init_memory', activ='tanh')
-        r_init_memory = get_layer('ff')[1](tparams, context_emb, options,
-                        prefix='r_init_memory', activ='tanh')
 
     # word embedding (source), forward and backward
     emb = tparams['Wemb'][x.flatten()]
@@ -3446,11 +3420,9 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
 
     # encoder
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
-                                            prefix='encoder', mask=x_mask, init_state=f_context_emb,
-                                            init_memory=f_init_memory, sc=context_emb)
+                                            prefix='encoder', mask=x_mask)
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
-                                             prefix='encoder_r', mask=xr_mask, init_state=r_context_emb,
-                                             init_memory=r_init_memory, sc=context_emb)
+                                             prefix='encoder_r', mask=xr_mask)
 
     # concatenate forward and backward rnn hidden states
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
@@ -3470,7 +3442,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
         outs = [init_state, ctx, context_emb, init_memory]
     else:
         outs = [init_state, ctx, context_emb]
-    f_init_2 = theano.function([x, xc, x_mask, xc_mask], outs, name='f_init_2', profile=profile)
+    f_init_2 = theano.function([x, xc, x_mask, xc_mask, xc_mask_3], outs, name='f_init_2', profile=profile)
     print 'Done'
 
     y = tensor.vector('y_sampler', dtype='int64')
@@ -3493,7 +3465,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
                                             one_step=True,
                                             init_state=init_state,
                                             init_memory=init_memory,
-                                            sc=context_emb)
+                                            sc=context_emb, sc_mask=xc_mask_2)
     # get the next hidden state
     next_state = proj[0]
     if options['decoder'].startswith('lstm'):
@@ -3502,6 +3474,8 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     # get the weighted averages of context for this target word y
     ctxs = proj[1]
 
+    tsc = proj[4]
+
     logit_lstm = get_layer('ff')[1](tparams, next_state, options,
                                     prefix='ff_logit_lstm', activ='linear')
     logit_prev = get_layer('ff')[1](tparams, emb_copy, options,
@@ -3509,7 +3483,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
     #print logit_ctx.ndim
-    logit_sc = get_layer('ff')[1](tparams, context_emb, options,
+    logit_sc = get_layer('ff')[1](tparams, tsc, options,
                                    prefix='ff_logit_sc', activ='linear')
     #print logit_sc.ndim
     #ipdb.set_trace()
@@ -3529,24 +3503,24 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     # sampled word for the next target, next hidden state to be used
     print 'Building f_next..',
     if options['decoder'].startswith('lstm'):
-        inps = [y, ctx, init_state, context_emb, init_memory, x_mask]
+        inps = [y, ctx, init_state, context_emb, init_memory, x_mask, xc_mask_2]
         outs = [next_probs, next_sample, next_state, next_memory]
     else:
-        inps = [y, ctx, init_state, context_emb, x_mask]
+        inps = [y, ctx, init_state, context_emb, x_mask, xc_mask_2]
         outs = [next_probs, next_sample, next_state]
     f_next_2 = theano.function(inps, outs, name='f_next_2', profile=profile)
     print 'Done'
 
     return f_init_2, f_next_2
 
-def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, options, trng=None, maxlen=30):
+def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, xc_mask_2, xc_mask_3, options, trng=None, maxlen=30):
 
     # Always stochastic, always argmax
 
     sample = []
 
     # get initial state of decoder rnn and encoder context
-    ret = f_init_2(x, xc, x_mask, xc_mask)
+    ret = f_init_2(x, xc, x_mask, xc_mask, xc_mask_3)
     if options['decoder'].startswith('lstm'):
         next_state, ctx, sc, next_memory = ret[0], ret[1], ret[2], ret[3]
     else:
@@ -3555,9 +3529,9 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, options, t
 
     for ii in xrange(maxlen):
         if options['decoder'].startswith('lstm'):
-            inps = [next_w, ctx, next_state, sc, next_memory, x_mask]
+            inps = [next_w, ctx, next_state, sc, next_memory, x_mask, xc_mask_2]
         else:
-            inps = [next_w, ctx, next_state, sc, x_mask]
+            inps = [next_w, ctx, next_state, sc, x_mask, xc_mask_2]
         ret = f_next_2(*inps)
         if options['decoder'].startswith('lstm'):
             next_p, next_w, next_state, next_memory = ret[0], ret[1], ret[2], ret[3]
@@ -3614,7 +3588,7 @@ def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_
                                             n_words=options['n_words'])
 
         samples = gen_sample_2(tparams, f_init_2, f_next_2,
-                                   x, xc, x_mask, xc_mask,
+                                   x, xc, x_mask, xc_mask, xc_mask_2, xc_mask_3,
                                    options, trng=trng,
                                    maxlen=maxlen)
 
