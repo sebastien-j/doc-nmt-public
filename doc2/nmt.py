@@ -95,6 +95,7 @@ layers = {'ff': ('param_init_fflayer', 'fflayer'),
           'lstm_cond': ('param_init_lstm_cond', 'lstm_cond_layer'),
           'lstm_cond_simple_sc': ('param_init_lstm_cond_simple_sc', 'lstm_cond_simple_sc_layer'),
           'lstm_cond_late_sc': ('param_init_lstm_cond_late_sc', 'lstm_cond_late_sc_layer'),
+          'lstm_cond_v0': ('param_init_lstm_cond_v0', 'lstm_cond_v0_layer'),
           }
 
 
@@ -177,7 +178,14 @@ def prepare_data(seqs_x, seqs_y, seqs_xc, maxlen=None, n_words_src=30000,
     # x: a list of sentences
     lengths_x = [len(s) for s in seqs_x]
     lengths_y = [len(s) for s in seqs_y]
-    lengths_xc = [len(s) for s in seqs_xc]
+    lengths_xc = [len(s) for s in seqs_xc] # Num context sentences
+    num_words = []
+    for sample in seqs_xc:
+        tmp = []
+        for sent in sample:
+            length = len(sent)
+            tmp.append(length)
+        num_words.append(tmp)
 
     if maxlen is not None:
         new_seqs_x = []
@@ -186,7 +194,8 @@ def prepare_data(seqs_x, seqs_y, seqs_xc, maxlen=None, n_words_src=30000,
         new_lengths_x = []
         new_lengths_y = []
         new_lengths_xc = []
-        for l_x, s_x, l_y, s_y, l_xc, s_xc in zip(lengths_x, seqs_x, lengths_y, seqs_y, lengths_xc, seqs_xc):
+        new_num_words = []
+        for s_x, s_y, s_xc, l_x, l_y, l_xc, l_nw in zip(seqs_x, seqs_y, seqs_xc, lengths_x, lengths_y, lengths_xc, num_words):
             if l_x < maxlen and l_y < maxlen:
                 new_seqs_x.append(s_x)
                 new_lengths_x.append(l_x)
@@ -194,36 +203,50 @@ def prepare_data(seqs_x, seqs_y, seqs_xc, maxlen=None, n_words_src=30000,
                 new_lengths_y.append(l_y)
                 new_seqs_xc.append(s_xc)
                 new_lengths_xc.append(l_xc)
-        lengths_x = new_lengths_x
+                new_num_words.append(l_nw)
         seqs_x = new_seqs_x
-        lengths_y = new_lengths_y
         seqs_y = new_seqs_y
-        lengths_xc = new_lengths_xc
         seqs_xc = new_seqs_xc
+        lengths_x = new_lengths_x
+        lengths_y = new_lengths_y
+        lengths_xc = new_lengths_xc
+        num_words = new_num_words
 
     if len(lengths_x) < 1 or len(lengths_y) < 1:
-        return None, None, None, None, None, None, lengths_x, lengths_y, lengths_xc
+        return None, None, None, None, None, None, lengths_x, lengths_y, lengths_xc, xc_mask_2, xc_mask_3
 
     n_samples = len(seqs_x)
     maxlen_x = numpy.max(lengths_x) + 1
     maxlen_y = numpy.max(lengths_y) + 1
-    maxlen_xc = numpy.max(lengths_xc) + 1 # Use EOS token (similar to bias, and makes sampling a bit easier to code)
+    maxlen_xc = numpy.max(lengths_xc)# No +1. If no context, an empty sentence will be []
+    max_words = 0
+    for sample in num_words:
+        for nw in sample:
+            if nw > max_words:
+                max_words = nw
+    max_words += 1 # There could be sentences with no tokens
 
     x = numpy.zeros((maxlen_x, n_samples)).astype('int64')
     y = numpy.zeros((maxlen_y, n_samples)).astype('int64')
-    xc = numpy.zeros((maxlen_xc, n_samples)).astype('int64')
+    xc = numpy.zeros((maxlen_xc, n_samples, max_words)).astype('int64')
     x_mask = numpy.zeros((maxlen_x, n_samples)).astype('float32')
     y_mask = numpy.zeros((maxlen_y, n_samples)).astype('float32')
-    xc_mask = numpy.zeros((maxlen_xc, n_samples)).astype('float32')
+    xc_mask = numpy.zeros((maxlen_xc, n_samples, max_words)).astype('float32')
+    xc_mask_2 = numpy.zeros((maxlen_xc, n_samples)).astype('float32')
+    xc_mask_3 = numpy.ones((maxlen_xc, n_samples)).astype('float32')
     for idx, [s_x, s_y, s_xc] in enumerate(zip(seqs_x, seqs_y, seqs_xc)):
         x[:lengths_x[idx], idx] = s_x
         x_mask[:lengths_x[idx]+1, idx] = 1.
         y[:lengths_y[idx], idx] = s_y
         y_mask[:lengths_y[idx]+1, idx] = 1.
-        xc[:lengths_xc[idx], idx] = s_xc
-        xc_mask[:lengths_xc[idx]+1, idx] = 1. # EOS (bias)
+        for ii, sent in enumerate(s_xc): # s_xc : num_context_sentences x num_words
+            nw = len(sent)
+            xc[ii, idx, :nw] = sent
+            xc_mask[ii, idx, :nw+1] = 1.
+            xc_mask_3[ii, idx] = nw+1
+        xc_mask_2[:lengths_xc[idx], idx] = 1.
 
-    return x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc
+    return x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc, xc_mask_2, xc_mask_3
 
 
 # feedforward layer: affine transformation + point-wise nonlinearity
@@ -2696,6 +2719,226 @@ def lstm_cond_late_sc_layer(tparams, state_below, options, prefix='lstm_cond_lat
                                     strict=True)
     return rval
 
+# Conditional LSTM layer with Attention
+def param_init_lstm_cond_v0(options, params, prefix='lstm_cond_v0',
+                        nin=None, dim=None, dimctx=None, rng=None):
+    if nin is None:
+        nin = options['dim']
+    if dim is None:
+        dim = options['dim']
+    if dimctx is None:
+        dimctx = options['dim']
+
+    params = param_init_lstm(options, params, prefix, nin=nin, dim=dim, rng=rng)
+
+    # context to LSTM
+    Wc = norm_weight(dimctx, dim*4, rng=rng)
+    params[_p(prefix, 'Wc')] = Wc
+
+    # attention: prev -> hidden
+    Wi_att = norm_weight(nin, dimctx, rng=rng)
+    params[_p(prefix, 'Wi_att')] = Wi_att
+
+    Wi_sc_att = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Wi_sc_att')] = Wi_sc_att
+
+    # attention: context -> hidden
+    Wc_att = norm_weight(dimctx, rng=rng)
+    params[_p(prefix, 'Wc_att')] = Wc_att
+
+    Wc_sc_att = norm_weight(dim, rng=rng)
+    params[_p(prefix, 'Wc_sc_att')] = Wc_sc_att
+
+    # attention: LSTM -> hidden
+    Wd_att = norm_weight(dim, dimctx, rng=rng)
+    params[_p(prefix, 'Wd_att')] = Wd_att
+
+    Wd_sc_att = norm_weight(dim, dim, rng=rng)
+    params[_p(prefix, 'Wd_sc_att')] = Wd_sc_att
+ 
+    # attention: hidden bias
+    b_att = numpy.zeros((dimctx,)).astype('float32')
+    params[_p(prefix, 'b_att')] = b_att
+
+    b_sc_att = numpy.zeros((dim,)).astype('float32')
+    params[_p(prefix, 'b_sc_att')] = b_sc_att
+
+    # attention:
+    U_att = norm_weight(dimctx, 1, rng=rng)
+    params[_p(prefix, 'U_att')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_tt')] = c_att
+
+    U_sc_att = norm_weight(dim, 1, rng=rng)
+    params[_p(prefix, 'U_sc_att')] = U_sc_att
+    c_sc_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_sc_tt')] = c_sc_att
+
+    Wr = norm_weight(dim, dim, rng=rng)
+    params[_p(prefix, 'Wr')] = Wr
+    Wrr = norm_weight(dim, dim, rng=rng)
+    params[_p(prefix, 'Wrr')] = Wrr
+    params[_p(prefix,'br')] = numpy.zeros((dim,)).astype('float32')
+
+    return params
+
+def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
+                   mask=None, context=None, one_step=False, init_state=None, init_memory=None,
+                   context_mask=None, **kwargs):
+
+    assert 'sc' in kwargs # sc: timesteps x n_samples x dim_sc
+    sc = kwargs['sc']
+    assert 'sc_mask' in kwargs # sc: timesteps x n_samples
+    sc_mask = kwargs['sc_mask']
+
+    assert context, 'Context must be provided'
+    assert context.ndim == 3, \
+        'Context must be 3-d: #annotation x #sample x dim'
+
+    if one_step:
+        assert init_state, 'previous state must be provided'
+        assert init_memory, 'previous cell must be provided'
+
+    nsteps = state_below.shape[0]
+    if state_below.ndim == 3:
+        n_samples = state_below.shape[1]
+    else:
+        n_samples = 1
+
+    # mask
+    if mask is None:  # sampling or beamsearch
+        mask = tensor.alloc(1., state_below.shape[0], 1)
+
+    dim = tparams[_p(prefix,'U')].shape[0]
+
+    # initial/previous state
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
+    if init_memory is None:
+        init_memory = tensor.alloc(0., n_samples, dim)
+
+    # projected context
+    pctx_ = tensor.dot(context, tparams[_p(prefix, 'Wc_att')]) + \
+        tparams[_p(prefix, 'b_att')]
+    sc_pctx_ = tensor.dot(sc, tparams[_p(prefix, 'Wc_sc_att')]) + \
+        tparams[_p(prefix, 'b_sc_att')]
+
+    def _slice(_x, n, dim):
+        if _x.ndim == 3:
+            return _x[:, :, n*dim:(n+1)*dim]
+        return _x[:, n*dim:(n+1)*dim]
+
+    # projected x into lstm
+    state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + \
+        tparams[_p(prefix, 'b')]
+    # projected x into attention module
+    state_belowc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_att')])
+    state_belowsc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_sc_att')])
+
+    # step function to be used by scan
+    # arguments    | sequences      |  outputs-info   | non-seqs ...
+    def _step_slice(m_, x_, xc_, xsc_, h_, ctx_, alpha_, c_, tsc, sc_alpha_, pctx_, cc_, sc_pctx_, sc_cc_,
+                    U, Wc, Wd_att, Wd_sc_att, U_att, U_sc_att, c_tt, c_sc_tt, Wr, Wrr, br):
+
+        # Compute attention separately
+
+        # attention
+        # project previous hidden state
+        pstate_ = tensor.dot(h_, Wd_att)
+
+        # add projected context
+        pctx__ = pctx_ + pstate_[None, :, :]
+
+        # add projected previous output
+        pctx__ += xc_
+        pctx__ = tensor.tanh(pctx__)
+
+        # compute alignment weights
+        alpha = tensor.dot(pctx__, U_att)+c_tt
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        alpha = tensor.exp(alpha)
+        if context_mask:
+            alpha = alpha * context_mask
+        alpha = alpha / alpha.sum(0, keepdims=True)
+
+        # conpute the weighted averages - current context to gru
+        ctx_ = (cc_ * alpha[:, :, None]).sum(0)
+
+        sc_pstate_ = tensor.dot(h_, Wd_sc_att)
+
+        # add projected context
+        sc_pctx__ = sc_pctx_ + pstate_[None, :, :]
+
+        # add projected previous output
+        sc_pctx__ += xsc_
+        sc_pctx__ = tensor.tanh(sc_pctx__)
+
+        # compute alignment weights
+        sc_alpha = tensor.dot(sc_pctx__, U_sc_att)+c_sc_tt
+        sc_alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        sc_alpha = tensor.exp(alpha)
+        sc_alpha = sc_alpha * sc_mask
+        sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
+
+        # conpute the weighted averages - current context to gru
+        tsc = (sc_cc_ * sc_alpha[:, :, None]).sum(0)
+
+        # conditional lstm layer computations
+        preact = tensor.dot(h_, U)
+        preact += x_
+        preact += tensor.dot(ctx_, Wc)
+
+        i = tensor.nnet.sigmoid(_slice(preact, 0, dim))
+        f = tensor.nnet.sigmoid(_slice(preact, 1, dim))
+        o = tensor.nnet.sigmoid(_slice(preact, 2, dim))
+        c = tensor.tanh(_slice(preact, 3, dim))
+
+        c = f * c_ + i * c
+        c = m_[:, None] * c + (1. - m_)[:, None] * c_
+
+        r = tensor.nnet.sigmoid(tensor.dot(tsc, Wr) + tensor.dot(c, Wrr) + br)
+
+        h = o * tensor.tanh(c + r * tsc)
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
+
+        return h, ctx_, alpha.T, c, tsc, sc_alpha.T
+
+    seqs = [mask, state_below_, state_belowc, state_belowsc]
+    _step = _step_slice
+
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'Wd_att')],
+                   tparams[_p(prefix, 'Wd_sc_att')],
+                   tparams[_p(prefix, 'U_att')],
+                   tparams[_p(prefix, 'U_sc_att')],
+                   tparams[_p(prefix, 'c_tt')],
+                   tparams[_p(prefix, 'c_sc_tt')],
+                   tparams[_p(prefix, 'Wr')],
+                   tparams[_p(prefix, 'Wrr')],
+                   tparams[_p(prefix, 'br')]]
+
+    if one_step:
+        rval = _step(*(
+            seqs+[init_state, None, None, init_memory, None, None, pctx_, context, sc_pctx_, sc]+shared_vars))
+    else:
+        rval, updates = theano.scan(
+            _step,
+            sequences=seqs,
+            outputs_info=[init_state,
+                          tensor.alloc(0., n_samples, context.shape[2]),
+                          tensor.alloc(0., n_samples, context.shape[0]),
+                          init_memory,
+                          tensor.alloc(0., n_samples, sc.shape[2]),
+                          tensor.alloc(0., n_samples, sc.shape[0]),],
+            non_sequences=[pctx_,
+                           context, sc_pctx_, sc]+shared_vars,
+            name=_p(prefix, '_layers'),
+            n_steps=nsteps,
+            profile=profile,
+            strict=True)
+    return rval
+
 # initialize all parameters
 def init_params(options):
     params = OrderedDict()
@@ -2778,8 +3021,10 @@ def build_model(tparams, options):
     x_mask = tensor.matrix('x_mask', dtype='float32')
     y = tensor.matrix('y', dtype='int64')
     y_mask = tensor.matrix('y_mask', dtype='float32')
-    xc = tensor.matrix('xc', dtype='int64')
-    xc_mask = tensor.matrix('xc_mask', dtype='float32')    
+    xc = tensor.tensor3('xc', dtype='int64')
+    xc_mask = tensor.tensor3('xc_mask', dtype='float32')
+    xc_mask_2 = tensor.matrix('xc_mask_2', dtype='float32')
+    xc_mask_3 = tensor.matrix('xc_mask_3', dtype='float32')
 
     # for the backward rnn, we just need to invert x and x_mask
     xr = x[::-1]
@@ -2788,29 +3033,16 @@ def build_model(tparams, options):
     n_timesteps = x.shape[0]
     n_timesteps_trg = y.shape[0]
     n_timesteps_context = xc.shape[0]
+    max_words = xc.shape[2]
     n_samples = x.shape[1]
 
     context_emb = tparams['Wemb'][xc.flatten()]
-    context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
+    context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
-    # tensor.clip is not strictly necessary anymore. (EOS always there)
-    context_emb = (context_emb * xc_mask[:,:,None]).sum(0) / tensor.clip(xc_mask.sum(0), 1.0, numpy.inf)[:, None] # n_samples x options['dim_word'], n_samples x 1
+    context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
     if options['kwargs'].get('use_sc_dropout', False):
         context_emb = dropout_layer(context_emb, use_noise, trng, p=1.0-options['kwargs'].get('use_sc_dropout_p', 0.5))
-
-    f_context_emb = get_layer('ff')[1](tparams, context_emb, options,
-                                    prefix='f_context_emb', activ='tanh')
-    r_context_emb = get_layer('ff')[1](tparams, context_emb, options,
-                                    prefix='r_context_emb', activ='tanh')
-
-    f_init_memory = None
-    r_init_memory = None
-    if options['encoder'].startswith('lstm'):
-        f_init_memory = get_layer('ff')[1](tparams, context_emb, options,
-                        prefix='f_init_memory', activ='tanh')
-        r_init_memory = get_layer('ff')[1](tparams, context_emb, options,
-                prefix='r_init_memory', activ='tanh')
 
     # word embedding for forward rnn (source)
     emb = tparams['Wemb'][x.flatten()]
@@ -2826,17 +3058,11 @@ def build_model(tparams, options):
 
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder',
-                                            mask=x_mask,
-                                            init_state=f_context_emb,
-                                            init_memory=f_init_memory,
-                                            sc=context_emb)
+                                            mask=x_mask)
 
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
                                              prefix='encoder_r',
-                                             mask=xr_mask,
-                                             init_state=r_context_emb,
-                                             init_memory=r_init_memory,
-                                             sc=context_emb)
+                                             mask=xr_mask)
 
     # context will be the concatenation of forward and backward rnns
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
@@ -2876,7 +3102,7 @@ def build_model(tparams, options):
                                             one_step=False,
                                             init_state=init_state,
                                             init_memory=init_memory,
-                                            sc=context_emb)
+                                            sc=context_emb, sc_mask=xc_mask_2)
     # hidden states of the decoder gru
     proj_h = proj[0]
 
@@ -2886,6 +3112,9 @@ def build_model(tparams, options):
     # weights (alignment matrix)
     opt_ret['dec_alphas'] = proj[2]
 
+    # weighted averages of source context
+    tsc = proj[4]
+
     # compute word probabilities
     logit_lstm = get_layer('ff')[1](tparams, proj_h, options,
                                     prefix='ff_logit_lstm', activ='linear')
@@ -2893,7 +3122,7 @@ def build_model(tparams, options):
                                     prefix='ff_logit_prev', activ='linear')
     logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
                                    prefix='ff_logit_ctx', activ='linear')
-    logit_sc = get_layer('ff')[1](tparams, context_emb, options,
+    logit_sc = get_layer('ff')[1](tparams, tsc, options,
                                    prefix='ff_logit_sc', activ='linear')
     logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
     if options['use_dropout']:
@@ -3363,7 +3592,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
     for x, y, xc in iterator:
         n_done += len(x)
 
-        x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc = prepare_data(x, y, xc,
+        x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc, xc_mask_2, xc_mask_3 = prepare_data(x, y, xc,
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'])
 
@@ -3386,7 +3615,7 @@ def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_
     for x, y, xc in iterator:
         n_done += len(x)
 
-        x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc = prepare_data(x, y, xc,
+        x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc, xc_mask_2, xc_mask_3 = prepare_data(x, y, xc,
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'])
 
@@ -3722,7 +3951,7 @@ def train(rng=123,
             uidx += 1
             use_noise.set_value(1.)
 
-            x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc = prepare_data(x, y, xc, maxlen=maxlen,
+            x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc, xc_mask_2, xc_mask_3 = prepare_data(x, y, xc, maxlen=maxlen,
                                                 n_words_src=n_words_src,
                                                 n_words=n_words)
 
