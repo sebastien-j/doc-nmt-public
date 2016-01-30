@@ -3295,10 +3295,12 @@ def gen_sample(tparams, f_init, f_next, x, xc, xc_mask, xc_mask_2, xc_mask_3, op
     next_w = -1 * numpy.ones((1,)).astype('int64')  # bos indicator
     #print 'B', next_w.shape, next_state.shape, ctx0.shape, sc0.shape, next_memory.shape
 
+    xc_mask_2_0 = xc_mask_2[:]
     for ii in xrange(maxlen):
         #print 'C', ctx0.shape, sc0.shape
         ctx = numpy.tile(ctx0, [live_k, 1])
         sc = numpy.tile(sc0, [live_k, 1])
+        xc_mask_2 = numpy.tile(xc_mask_2_0, [live_k])
         if options['decoder'].startswith('lstm'):
             inps = [next_w, ctx, next_state, sc, next_memory, xc_mask_2]
         else:
