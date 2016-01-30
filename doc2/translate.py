@@ -29,11 +29,11 @@ def translate_model(queue, rqueue, pid, model, options, k, normalize):
     # word index
     f_init, f_next = build_sampler(tparams, options, trng, use_noise)
 
-    def _translate(seq, seq_context):
+    def _translate(seq, seq_context, xc_mask, xc_mask_2, xc_mask_3):
         # sample given an input sequence and obtain scores
         sample, score = gen_sample(tparams, f_init, f_next,
                                    numpy.array(seq).reshape([len(seq), 1]),
-                                   numpy.array(seq_context).reshape([len(seq_context), 1]),
+                                   xc, xc_mask, xc_mask_2, xc_mask_3,
                                    options, trng=trng, k=k, maxlen=200,
                                    stochastic=False, argmax=False)
 
@@ -49,9 +49,9 @@ def translate_model(queue, rqueue, pid, model, options, k, normalize):
         if req is None:
             break
 
-        idx, x, xc = req[0], req[1], req[2]
+        idx, x, xc, xc_mask, xc_mask_2, xc_mask_3 = req[0], req[1], req[2], req[3], req[4], req[5]
         print pid, '-', idx
-        seq = _translate(x, xc)
+        seq = _translate(x, xc, xc_mask, xc_mask_2, xc_mask_3)
 
         rqueue.put((idx, seq))
 
@@ -59,7 +59,7 @@ def translate_model(queue, rqueue, pid, model, options, k, normalize):
 
 
 def main(model, dictionary, dictionary_target, source_file, source_context_file, saveto, k=5,
-         normalize=False, n_process=5, chr_level=False):
+         normalize=False, n_process=5):
 
     # load model model_options
     with open('%s.pkl' % model, 'rb') as f:
@@ -109,24 +109,32 @@ def main(model, dictionary, dictionary_target, source_file, source_context_file,
         with open(fname, 'r') as f:
             with open(gname, 'r') as g:
                 for idx, line in enumerate(f):
-                    if chr_level:
-                        words = list(line.decode('utf-8').strip())
-                    else:
-                        words = line.strip().split()
+                    words = line.strip().split()
                     x = map(lambda w: word_dict[w] if w in word_dict else 1, words)
                     x = map(lambda ii: ii if ii < options['n_words_src'] else 1, x)
                     x += [0]
 
                     gline = g.readline()
-                    if chr_level:
-                        context_words = list(gline.decode('utf-8').strip())
-                    else:
-                        context_words = gline.strip().split()
-                    xc = map(lambda w: word_dict[w] if w in word_dict else 1, context_words)
-                    xc = map(lambda ii: ii if ii < options['n_words_src'] else 1, xc)
-                    xc += [0]
-                        
-                    queue.put((idx, x, xc))
+                    context_words = gline.strip().split(' ||| ') # with |||
+                    
+                    num_sent = len(context_words)
+                    maxlen = max(len(sent) for sent in context_words) + 1
+                    xc = numpy.zeros((num_sent, 1, maxlen), dtype=numpy.int64)
+                    xc_mask = numpy.zeros((num_sent, 1, maxlen), dtype=numpy.float32)
+                    xc_mask_2 = numpy.zeros((num_sent, 1), dtype=numpy.float32)
+                    xc_mask_3 = numpy.zeros((num_sent, 1), dtype=numpy.float32)
+
+                    for ii, sent in enumerate(context_words):
+                        sent = sent.strip().split()
+                        tmp = map(lambda w: word_dict[w] if w in word_dict else 1, sent)
+                        tmp = map(lambda ii: ii if ii < options['n_words_src'] else 1, tmp)
+                        tmp += [0]
+                        xc[ii,0,:len(tmp)] = tmp
+                        xc_mask[ii,0,:len(tmp)] = 1.0
+                        xc_mask_2[ii,0] = 1.0
+                        xc_mask_3[ii,0] = float(len(tmp))
+                    
+                    queue.put((idx, x, xc, xc_mask, xc_mask_2, xc_mask_3))
         return idx+1
 
     def _finish_processes():
@@ -156,7 +164,6 @@ if __name__ == "__main__":
     parser.add_argument('-k', type=int, default=5)
     parser.add_argument('-p', type=int, default=5)
     parser.add_argument('-n', action="store_true", default=False)
-    parser.add_argument('-c', action="store_true", default=False)
     parser.add_argument('model', type=str)
     parser.add_argument('dictionary', type=str)
     parser.add_argument('dictionary_target', type=str)
@@ -167,5 +174,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     main(args.model, args.dictionary, args.dictionary_target, args.source, args.source_context,
-         args.saveto, k=args.k, normalize=args.n, n_process=args.p,
-         chr_level=args.c)
+         args.saveto, k=args.k, normalize=args.n, n_process=args.p)
