@@ -2758,7 +2758,7 @@ def param_init_lstm_cond_v0(options, params, prefix='lstm_cond_v0',
 
     Wd_sc_att = norm_weight(dim, nin, rng=rng)
     params[_p(prefix, 'Wd_sc_att')] = Wd_sc_att
- 
+
     # attention: hidden bias
     b_att = numpy.zeros((dimctx,)).astype('float32')
     params[_p(prefix, 'b_att')] = b_att
@@ -2827,7 +2827,7 @@ def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
         tparams[_p(prefix, 'b_att')]
     sc_pctx_ = tensor.dot(sc, tparams[_p(prefix, 'Wc_sc_att')]) + \
         tparams[_p(prefix, 'b_sc_att')]
-    
+
     def _slice(_x, n, dim):
         if _x.ndim == 3:
             return _x[:, :, n*dim:(n+1)*dim]
@@ -3409,6 +3409,8 @@ def init_params(options):
     rng = numpy.random.RandomState(options['rng'])
 
     # embedding
+    if options['kwargs'].get('new_source_embs', False):
+        params['Wemb_sc'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
     params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
     params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word'], rng=rng)
 
@@ -3429,7 +3431,7 @@ def init_params(options):
 
     if options['decoder'].startswith('lstm'):
         params = get_layer('ff')[0](options, params, prefix='ff_cell',
-                                    nin=ctxdim, nout=options['dim'], rng=rng)    
+                                    nin=ctxdim, nout=options['dim'], rng=rng)
     # decoder
     params = get_layer(options['decoder'])[0](options, params,
                                               prefix='decoder',
@@ -3483,7 +3485,10 @@ def build_model(tparams, options):
     max_words = xc.shape[2]
     n_samples = x.shape[1]
 
-    context_emb = tparams['Wemb'][xc.flatten()]
+    if options['kwargs'].get('new_source_embs', False):
+        context_emb = tparams['Wemb_sc'][xc.flatten()]
+    else:
+        context_emb = tparams['Wemb'][xc.flatten()]
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
     context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
@@ -3574,7 +3579,7 @@ def build_model(tparams, options):
     logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
     if options['use_dropout']:
         logit = dropout_layer(logit, use_noise, trng, p=1.0-options['kwargs'].get('use_dropout_p', 0.5))
-    logit = get_layer('ff')[1](tparams, logit, options, 
+    logit = get_layer('ff')[1](tparams, logit, options,
                                prefix='ff_logit', activ='linear')
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
@@ -3605,7 +3610,10 @@ def build_sampler(tparams, options, trng, use_noise=None):
     max_words = xc.shape[2]
     n_samples = x.shape[1]
 
-    context_emb = tparams['Wemb'][xc.flatten()]
+    if options['kwargs'].get('new_source_embs', False):
+        context_emb = tparams['Wemb_sc'][xc.flatten()]
+    else:
+        context_emb = tparams['Wemb'][xc.flatten()]
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
     context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
@@ -3865,7 +3873,10 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     max_words = xc.shape[2]
     n_samples = x.shape[1]
 
-    context_emb = tparams['Wemb'][xc.flatten()]
+    if options['kwargs'].get('new_source_embs', False):
+        context_emb = tparams['Wemb_sc'][xc.flatten()]
+    else:
+        context_emb = tparams['Wemb'][xc.flatten()]
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
     context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
@@ -4057,7 +4068,7 @@ def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_
                                    options, trng=trng,
                                    maxlen=maxlen)
 
-        
+
         full_samples = numpy.vstack((full_samples, samples))
         if verbose:
             print >>sys.stderr, '%d samples computed' % (n_done)

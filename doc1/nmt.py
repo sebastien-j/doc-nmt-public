@@ -2703,6 +2703,8 @@ def init_params(options):
     rng = numpy.random.RandomState(options['rng'])
 
     # embedding
+    if options['kwargs'].get('new_source_embs', False):
+        params['Wemb_sc'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
     params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
     params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word'], rng=rng)
 
@@ -2739,7 +2741,7 @@ def init_params(options):
 
     if options['decoder'].startswith('lstm'):
         params = get_layer('ff')[0](options, params, prefix='ff_cell',
-                                    nin=ctxdim, nout=options['dim'], rng=rng)    
+                                    nin=ctxdim, nout=options['dim'], rng=rng)
     # decoder
     params = get_layer(options['decoder'])[0](options, params,
                                               prefix='decoder',
@@ -2779,7 +2781,7 @@ def build_model(tparams, options):
     y = tensor.matrix('y', dtype='int64')
     y_mask = tensor.matrix('y_mask', dtype='float32')
     xc = tensor.matrix('xc', dtype='int64')
-    xc_mask = tensor.matrix('xc_mask', dtype='float32')    
+    xc_mask = tensor.matrix('xc_mask', dtype='float32')
 
     # for the backward rnn, we just need to invert x and x_mask
     xr = x[::-1]
@@ -2790,7 +2792,10 @@ def build_model(tparams, options):
     n_timesteps_context = xc.shape[0]
     n_samples = x.shape[1]
 
-    context_emb = tparams['Wemb'][xc.flatten()]
+    if options['kwargs'].get('new_source_embs', False):
+        context_emb = tparams['Wemb_sc'][xc.flatten()]
+    else:
+        context_emb = tparams['Wemb'][xc.flatten()]
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
     # tensor.clip is not strictly necessary anymore. (EOS always there)
@@ -2898,7 +2903,7 @@ def build_model(tparams, options):
     logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
     if options['use_dropout']:
         logit = dropout_layer(logit, use_noise, trng, p=1.0-options['kwargs'].get('use_dropout_p', 0.5))
-    logit = get_layer('ff')[1](tparams, logit, options, 
+    logit = get_layer('ff')[1](tparams, logit, options,
                                prefix='ff_logit', activ='linear')
     logit_shp = logit.shape
     probs = tensor.nnet.softmax(logit.reshape([logit_shp[0]*logit_shp[1],
@@ -2924,7 +2929,10 @@ def build_sampler(tparams, options, trng, use_noise=None):
     n_samples = x.shape[1]
     n_timesteps_context = xc.shape[0]
 
-    context_emb = tparams['Wemb'][xc.flatten()]
+    if options['kwargs'].get('new_source_embs', False):
+        context_emb = tparams['Wemb_sc'][xc.flatten()]
+    else:
+        context_emb = tparams['Wemb'][xc.flatten()]
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
     context_emb = context_emb.mean(0) # Will probably crash here for no context # FIXME
@@ -3189,7 +3197,10 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     n_samples = x.shape[1]
     n_timesteps_context = xc.shape[0]
 
-    context_emb = tparams['Wemb'][xc.flatten()]
+    if options['kwargs'].get('new_source_embs', False):
+        context_emb = tparams['Wemb_sc'][xc.flatten()]
+    else:
+        context_emb = tparams['Wemb'][xc.flatten()]
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
     #context_emb = context_emb.mean(0) # Will probably crash here for no context # FIXME
@@ -3395,7 +3406,7 @@ def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_
                                    options, trng=trng,
                                    maxlen=maxlen)
 
-        
+
         full_samples = numpy.vstack((full_samples, samples))
         if verbose:
             print >>sys.stderr, '%d samples computed' % (n_done)
