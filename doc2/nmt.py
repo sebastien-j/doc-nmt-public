@@ -3410,7 +3410,11 @@ def init_params(options):
 
     # embedding
     if options['kwargs'].get('new_source_embs', False):
+        assert not options['kwargs'].get('tc', False)
         params['Wemb_sc'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
+    if options['kwargs'].get('new_target_embs', False):
+        assert options['kwargs'].get('tc', False)
+        params['Wemb_dec_sc'] = norm_weight(options['n_words'], options['dim_word'], rng=rng)
     params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
     params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word'], rng=rng)
 
@@ -3485,10 +3489,16 @@ def build_model(tparams, options):
     max_words = xc.shape[2]
     n_samples = x.shape[1]
 
-    if options['kwargs'].get('new_source_embs', False):
-        context_emb = tparams['Wemb_sc'][xc.flatten()]
+    if options['kwargs'].get('tc', False):
+        if options['kwargs'].get('new_target_embs', False):
+            context_emb = tparams['Wemb_dec_sc'][xc.flatten()]
+        else:
+            context_emb = tparams['Wemb_dec'][xc.flatten()]
     else:
-        context_emb = tparams['Wemb'][xc.flatten()]
+        if options['kwargs'].get('new_source_embs', False):
+            context_emb = tparams['Wemb_sc'][xc.flatten()]
+        else:
+            context_emb = tparams['Wemb'][xc.flatten()]
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
     context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
@@ -3610,10 +3620,16 @@ def build_sampler(tparams, options, trng, use_noise=None):
     max_words = xc.shape[2]
     n_samples = x.shape[1]
 
-    if options['kwargs'].get('new_source_embs', False):
-        context_emb = tparams['Wemb_sc'][xc.flatten()]
+    if options['kwargs'].get('tc', False):
+        if options['kwargs'].get('new_target_embs', False):
+            context_emb = tparams['Wemb_dec_sc'][xc.flatten()]
+        else:
+            context_emb = tparams['Wemb_dec'][xc.flatten()]
     else:
-        context_emb = tparams['Wemb'][xc.flatten()]
+        if options['kwargs'].get('new_source_embs', False):
+            context_emb = tparams['Wemb_sc'][xc.flatten()]
+        else:
+            context_emb = tparams['Wemb'][xc.flatten()]
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
     context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
@@ -3873,10 +3889,16 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     max_words = xc.shape[2]
     n_samples = x.shape[1]
 
-    if options['kwargs'].get('new_source_embs', False):
-        context_emb = tparams['Wemb_sc'][xc.flatten()]
+    if options['kwargs'].get('tc', False):
+        if options['kwargs'].get('new_target_embs', False):
+            context_emb = tparams['Wemb_dec_sc'][xc.flatten()]
+        else:
+            context_emb = tparams['Wemb_dec'][xc.flatten()]
     else:
-        context_emb = tparams['Wemb'][xc.flatten()]
+        if options['kwargs'].get('new_source_embs', False):
+            context_emb = tparams['Wemb_sc'][xc.flatten()]
+        else:
+            context_emb = tparams['Wemb'][xc.flatten()]
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
     context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
