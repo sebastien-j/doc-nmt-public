@@ -3577,6 +3577,8 @@ def build_model(tparams, options):
     # weighted averages of source context
     tsc = proj[4]
 
+    opt_ret['ctx_alphas'] = proj[5] #return h, ctx_, alpha.T, c, tsc, sc_alpha.T 
+
     # compute word probabilities
     logit_lstm = get_layer('ff')[1](tparams, proj_h, options,
                                     prefix='ff_logit_lstm', activ='linear')
