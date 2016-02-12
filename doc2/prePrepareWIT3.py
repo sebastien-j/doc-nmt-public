@@ -12,7 +12,8 @@ def main():
 
     args = parse_args()
     
-    restricted = ['<?xml', '<mteval', '<srcset', '<refset', '<doc', '<url', '<description', '<keywords', '<talkid', '<title', '</refset', '</srcset', '</mteval']
+    restricted = ['<?xml', '<mteval', '<srcset', '<refset', '<doc', '<url', '<description', '<keywords', '<talkid', '<title', '</refset', '</srcset', '</mteval',
+    '<h1', '</h1', '<p', '</p']
 
     with open(args.input) as f:
         with open(args.input[:-3]+'out.xml', 'w') as g:
@@ -26,7 +27,13 @@ def main():
                     if line.startswith('</doc>'):
                         g.write('<reviewer></reviewer>\n')
                     else:
-                        assert line.startswith('<seg id=') and line.endswith(' </seg>\n')
+                        try:
+                            assert line.startswith('<seg id=') and line.endswith(' </seg>\n')
+                        except:
+                            pos = line.find(">")
+                            line = line[:pos+1] + " " + line[pos+1:]
+                            line = line.replace('</seg>\n', ' </seg>\n')
+                            assert line.startswith('<seg id=') and line.endswith(' </seg>\n')
                         line = line.split()
                         line = ' '.join(line[2:-1]) + '\n'
                         g.write(line)
