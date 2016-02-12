@@ -9,17 +9,18 @@ def parse_args():
     parser.add_argument("--target",
             default="/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok", help="Target file")
     parser.add_argument("--source-text",
-            default="/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.text", help="Source file, no document info")
+            default=None, help="Source file, no document info")
     parser.add_argument("--target-text",
-            default="/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.text", help="Target file, no document info")
+            default=None, help="Target file, no document info")
     parser.add_argument("--source-context",
-            default="/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.en.tok.context", help="BOW source context")
+            default=None, help="BOW source context")
     parser.add_argument("--target-context",
-            default="/misc/kcgscratch1/WIT3/en-fr/train.tags.en-fr.fr.tok.context", help="BOW target context")
+            default=None, help="BOW target context")
     parser.add_argument("--num-context-left", type=int, default=0, help="Number of sentences on the left")
     parser.add_argument("--num-context-right", type=int, default=0, help="Number of sentences on the right")
     parser.add_argument("--use-middle", action="store_true", default=False, help="Use current sentence as part of context")
     parser.add_argument("--split-sentences", action="store_true", default=False)
+    parser.add_argument("--corpus", default="WIT3", help="Choice of 'WIT3' or 'europarl'")
     return parser.parse_args()
 
 def main():
@@ -40,24 +41,55 @@ def main():
     """
  
     args = parse_args()
-    
+    if args.source_text == None:
+        args.source_text = args.source + '.text'
+    if args.source_context == None:
+        args.source_context = args.source + '.context'
+    if args.target_text == None:
+        args.target_text = args.target + '.text'
+    if args.target_context == None:
+        args.target_context = args.target + '.context'
     src = []
     trg = []
     src_doc = []
     trg_doc = []
 
-    with open(args.source) as f:
-        with open(args.target) as g:
-            for src_line in f:
-                trg_line = g.readline()
-                if not src_line.startswith("&lt;"):
-                    src_doc.append(src_line.split())
-                    trg_doc.append(trg_line.split())
-                elif src_line.startswith("&lt; reviewer"): # At the end of every document, including the last one
+    if args.corpus == 'WIT3':
+        print "WIT3"
+        with open(args.source) as f:
+            with open(args.target) as g:
+                for src_line in f:
+                    trg_line = g.readline()
+                    if not src_line.startswith("&lt;"):
+                        src_doc.append(src_line.split())
+                        trg_doc.append(trg_line.split())
+                    elif src_line.startswith("&lt; reviewer"): # At the end of every document, including the last one
+                        src.append(src_doc)
+                        trg.append(trg_doc)
+                        src_doc = []
+                        trg_doc = []
+    elif args.corpus == 'europarl':
+        print "europarl"
+        with open(args.source) as f:
+            with open(args.target) as g:
+                for src_line in f:
+                    trg_line = g.readline()
+                    if not src_line.startswith("&lt;"):
+                        src_doc.append(src_line.split())
+                        trg_doc.append(trg_line.split())
+                    elif src_line.startswith("&lt; P"):
+                        pass
+                    elif src_line.startswith("&lt; SPEAKER") or src_line.startswith("&lt; CHAPTER"): # Before every chapter, or change of speaker
+                        if src_doc != []:
+                            assert trg_doc != []
+                            src.append(src_doc)
+                            trg.append(trg_doc)
+                            src_doc = []
+                            trg_doc = []
+                if src_doc != []:
+                    assert trg_doc != []
                     src.append(src_doc)
                     trg.append(trg_doc)
-                    src_doc = []
-                    trg_doc = []
 
     num_docs = len(src)
     assert num_docs == len(trg)
