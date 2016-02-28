@@ -4041,6 +4041,7 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, xc_mask_2,
         # None: next_w was originally chosen randomly (from a multinomial distribution)
         next_w = next_p.argmax(1)
         sample.append(next_w)
+        #print next_p.max(1)
 
     sample = numpy.asarray(sample)
     sample = sample.T
@@ -4097,6 +4098,7 @@ def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_
         if verbose:
             print >>sys.stderr, '%d samples computed' % (n_done)
 
+        #ipdb.set_trace()
     with open(fname, 'w') as f:
         for ii in xrange(len(full_samples)):
             sentence = []
@@ -4290,38 +4292,39 @@ def train(rng=123,
             worddicts_r[ii][vv] = kk
 
     # reload options
-    if reload_ and os.path.exists(saveto):
-        with open('%s.pkl' % saveto, 'rb') as f:
-            models_options = pkl.load(f)
+    #if reload_ and os.path.exists(saveto):
+    #    with open('%s.pkl' % saveto, 'rb') as f:
+    #        models_options = pkl.load(f) # THERE IS TYPO IN THIS VARIABLE!!!
 
+    print model_options
     print 'Loading data'
     train = TextIterator(datasets[0], datasets[1], datasets[2],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=batch_size,
-                         maxlen=maxlen)
+                         maxlen=maxlen, tc=model_options['kwargs'].get('tc', False))
     valid = TextIterator(valid_datasets[0], valid_datasets[1], valid_datasets[2],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=valid_batch_size,
-                         maxlen=2000)
+                         maxlen=2000, tc=model_options['kwargs'].get('tc', False))
     valid_noshuf = TextIterator(valid_datasets[0], valid_datasets[1], valid_datasets[2],
                          dictionaries[0], dictionaries[1],
                          n_words_source=n_words_src, n_words_target=n_words,
                          batch_size=valid_batch_size,
-                         maxlen=2000, shuffle=False)
+                         maxlen=2000, shuffle=False, tc=model_options['kwargs'].get('tc', False))
 
     if 'other_datasets' in kwargs:
         other = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1], kwargs['other_datasets'][2],
                              dictionaries[0], dictionaries[1],
                              n_words_source=n_words_src, n_words_target=n_words,
                              batch_size=valid_batch_size,
-                             maxlen=2000)
+                             maxlen=2000, tc=model_options['kwargs'].get('tc', False))
         other_noshuf = TextIterator(kwargs['other_datasets'][0], kwargs['other_datasets'][1], kwargs['other_datasets'][2],
                              dictionaries[0], dictionaries[1],
                              n_words_source=n_words_src, n_words_target=n_words,
                              batch_size=valid_batch_size,
-                             maxlen=2000, shuffle=False)
+                             maxlen=2000, shuffle=False, tc=model_options['kwargs'].get('tc', False))
     print 'Building model'
     params = init_params(model_options)
     # reload parameters
@@ -4418,6 +4421,7 @@ def train(rng=123,
         ml = model_options['kwargs'].get('valid_maxlen', 100)
         valid_fname = model_options['kwargs'].get('valid_output', 'output/valid_output')
         multibleu = model_options['kwargs'].get('multibleu', "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl")
+        #ipdb.set_trace()
         try:
             valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
                    multibleu, fname=valid_fname, maxlen=ml, verbose=True)
