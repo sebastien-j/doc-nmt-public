@@ -4411,6 +4411,28 @@ def train(rng=123,
 
     uidx = 0
     estop = False
+
+    if reload_:
+        use_noise.set_value(0.)
+
+        ml = model_options['kwargs'].get('valid_maxlen', 100)
+        valid_fname = model_options['kwargs'].get('valid_output', 'output/valid_output')
+        multibleu = model_options['kwargs'].get('multibleu', "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl")
+        try:
+            valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
+                   multibleu, fname=valid_fname, maxlen=ml, verbose=True)
+        except:
+            valid_out = ''
+            valid_bleu = 0.0
+
+        valid_errs = pred_probs(f_log_probs, prepare_data,
+                                model_options, valid, verbose=True)
+        valid_err = valid_errs.mean()
+
+        print 'Valid ', valid_err
+        print 'Valid BLEU', valid_out
+        print 'Best valid BLEU', numpy.array(history_errs).max()
+
     for eidx in xrange(max_epochs):
         n_samples = 0
 

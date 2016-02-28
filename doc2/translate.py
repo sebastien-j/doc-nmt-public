@@ -13,7 +13,7 @@ from nmt import (build_sampler, gen_sample, load_params,
 from multiprocessing import Process, Queue
 
 
-def translate_model(queue, rqueue, pid, model, options, k, normalize):
+def translate_model(queue, rqueue, pid, model, options, k, normalize, maxlen):
 
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     trng = RandomStreams(options['trng'])
@@ -34,7 +34,7 @@ def translate_model(queue, rqueue, pid, model, options, k, normalize):
         sample, score = gen_sample(tparams, f_init, f_next,
                                    numpy.array(seq).reshape([len(seq), 1]),
                                    xc, xc_mask, xc_mask_2, xc_mask_3,
-                                   options, trng=trng, k=k, maxlen=200,
+                                   options, trng=trng, k=k, maxlen=maxlen,
                                    stochastic=False, argmax=False)
 
         # normalize scores according to sequence lengths
@@ -59,12 +59,13 @@ def translate_model(queue, rqueue, pid, model, options, k, normalize):
 
 
 def main(model, dictionary, dictionary_target, source_file, source_context_file, saveto, k=5,
-         normalize=False, n_process=5):
+         normalize=False, n_process=5, maxlen=200, ctx_type='source'):
 
     # load model model_options
     with open('%s.pkl' % model, 'rb') as f:
         options = pkl.load(f)
 
+    print options['kwargs']
     # load source dictionary and invert
     with open(dictionary, 'rb') as f:
         word_dict = pkl.load(f)
@@ -90,7 +91,7 @@ def main(model, dictionary, dictionary_target, source_file, source_context_file,
     for midx in xrange(n_process):
         processes[midx] = Process(
             target=translate_model,
-            args=(queue, rqueue, midx, model, options, k, normalize))
+            args=(queue, rqueue, midx, model, options, k, normalize, maxlen))
         processes[midx].start()
 
     # utility function
@@ -118,16 +119,22 @@ def main(model, dictionary, dictionary_target, source_file, source_context_file,
                     context_words = gline.strip().split(' ||| ') # with |||
                     
                     num_sent = len(context_words)
-                    maxlen = max(len(sent) for sent in context_words) + 1
-                    xc = numpy.zeros((num_sent, 1, maxlen), dtype=numpy.int64)
-                    xc_mask = numpy.zeros((num_sent, 1, maxlen), dtype=numpy.float32)
+                    maxlen_ = max(len(sent.strip().split()) for sent in context_words) + 1
+                    xc = numpy.zeros((num_sent, 1, maxlen_), dtype=numpy.int64)
+                    xc_mask = numpy.zeros((num_sent, 1, maxlen_), dtype=numpy.float32)
                     xc_mask_2 = numpy.zeros((num_sent, 1), dtype=numpy.float32)
                     xc_mask_3 = numpy.zeros((num_sent, 1), dtype=numpy.float32)
 
                     for ii, sent in enumerate(context_words):
                         sent = sent.strip().split()
-                        tmp = map(lambda w: word_dict[w] if w in word_dict else 1, sent)
-                        tmp = map(lambda ii: ii if ii < options['n_words_src'] else 1, tmp)
+                        if ctx_type == 'source':
+                            tmp = map(lambda w: word_dict[w] if w in word_dict else 1, sent)
+                            tmp = map(lambda ii: ii if ii < options['n_words_src'] else 1, tmp)
+                        elif ctx_type == 'true_target':
+                            tmp = map(lambda w: word_dict_trg[w] if w in word_dict_trg else 1, sent)
+                            tmp = map(lambda ii: ii if ii < options['n_words'] else 1, tmp)
+                        else:
+                            raise Exception
                         tmp += [0]
                         xc[ii,0,:len(tmp)] = tmp
                         xc_mask[ii,0,:len(tmp)] = 1.0
@@ -170,8 +177,11 @@ if __name__ == "__main__":
     parser.add_argument('source', type=str)
     parser.add_argument('source_context', type=str)
     parser.add_argument('saveto', type=str)
+    parser.add_argument('maxlen', type=int, default=200)
+    parser.add_argument('ctx_type', type=str, default='source')
 
     args = parser.parse_args()
+    print args.ctx_type
 
     main(args.model, args.dictionary, args.dictionary_target, args.source, args.source_context,
-         args.saveto, k=args.k, normalize=args.n, n_process=args.p)
+         args.saveto, k=args.k, normalize=args.n, n_process=args.p, maxlen=args.maxlen, ctx_type=args.ctx_type)
