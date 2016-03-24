@@ -3418,6 +3418,17 @@ def init_params(options):
     params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
     params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word'], rng=rng)
 
+    if options['kwargs'].get('context_birnn', False):
+        assert options['dim_word'] % 2 == 0
+        params = get_layer(options['encoder'])[0](options, params,
+                                                  prefix='context_emb_fwd',
+                                                  nin=options['dim_word'],
+                                                  dim=options['dim_word'] // 2, rng=rng)
+        params = get_layer(options['encoder'])[0](options, params,
+                                                  prefix='context_emb_rev',
+                                                  nin=options['dim_word'],
+                                                  dim=options['dim_word'] // 2, rng=rng)
+
     # encoder: bidirectional RNN
     params = get_layer(options['encoder'])[0](options, params,
                                               prefix='encoder',
@@ -3503,6 +3514,16 @@ def build_model(tparams, options):
 
     context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
+    if options['kwargs'].get('context_birnn', False):
+        context_emb_fwd = get_layer(options['encoder'])[1](tparams, context_emb, options,
+                                            prefix='context_emb_fwd',
+                                            mask=xc_mask_2)
+        context_emb_rev = get_layer(options['encoder'])[1](tparams, context_emb[::-1], options,
+                                            prefix='context_emb_rev',
+                                            mask=xc_mask_2[::-1])
+        context_emb = concatenate([context_emb_fwd[0], context_emb_rev[0][::-1]], axis=context_emb_fwd[0].ndim-1)
+
+    # If we use 'context_birnn', should we also (or only) put dropout before?
     if options['kwargs'].get('use_sc_dropout', False):
         context_emb = dropout_layer(context_emb, use_noise, trng, p=1.0-options['kwargs'].get('use_sc_dropout_p', 0.5))
 
@@ -3612,6 +3633,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
     x = tensor.matrix('x', dtype='int64')
     xc = tensor.tensor3('xc', dtype='int64')
     xc_mask = tensor.tensor3('xc_mask', dtype='float32')
+    xc_mask_2 = tensor.matrix('xc_mask_2', dtype='float32')
     xc_mask_3 = tensor.matrix('xc_mask_3', dtype='float32')
 
     # for the backward rnn, we just need to invert x and x_mask
@@ -3635,6 +3657,15 @@ def build_sampler(tparams, options, trng, use_noise=None):
     context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
     context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
+
+    if options['kwargs'].get('context_birnn', False):
+        context_emb_fwd = get_layer(options['encoder'])[1](tparams, context_emb, options,
+                                            prefix='context_emb_fwd',
+                                            mask=xc_mask_2)
+        context_emb_rev = get_layer(options['encoder'])[1](tparams, context_emb[::-1], options,
+                                            prefix='context_emb_rev',
+                                            mask=xc_mask_2[::-1])
+        context_emb = concatenate([context_emb_fwd[0], context_emb_rev[0][::-1]], axis=context_emb_fwd[0].ndim-1)
 
     if options['kwargs'].get('use_sc_dropout', False):
         context_emb = dropout_layer(context_emb, use_noise, trng, p=1.0-options['kwargs'].get('use_sc_dropout_p', 0.5))
@@ -3671,14 +3702,17 @@ def build_sampler(tparams, options, trng, use_noise=None):
         outs = [init_state, ctx, context_emb, init_memory]
     else:
         outs = [init_state, ctx, context_emb]
-    f_init = theano.function([x, xc, xc_mask, xc_mask_3], outs, name='f_init', profile=profile)
+    if options['kwargs'].get('context_birnn', False):
+        ins = [x, xc, xc_mask, xc_mask_2, xc_mask_3]
+    else:
+        ins = [x, xc, xc_mask, xc_mask_3]
+    
+    f_init = theano.function(ins, outs, name='f_init', profile=profile)
     print 'Done'
 
     # x: 1 x 1
     y = tensor.vector('y_sampler', dtype='int64')
     init_state = tensor.matrix('init_state', dtype='float32')
-    xc_mask_2 = tensor.matrix('xc_mask_2', dtype='float32')
-
 
     # if it's the first word, emb should be all zero and it is indicated by -1
     emb = tensor.switch(y[:, None] < 0,
@@ -3771,7 +3805,10 @@ def gen_sample(tparams, f_init, f_next, x, xc, xc_mask, xc_mask_2, xc_mask_3, op
         hyp_memories = []
 
     # get initial state of decoder rnn and encoder context
-    ret = f_init(x, xc, xc_mask, xc_mask_3)
+    if options['kwargs'].get('context_birnn', False):
+        ret = f_init(x, xc, xc_mask, xc_mask_2, xc_mask_3)
+    else:
+        ret = f_init(x, xc, xc_mask, xc_mask_3)
     #print 'A', x.shape, xc.shape
     if options['decoder'].startswith('lstm'):
         next_state, ctx0, sc0, next_memory = ret[0], ret[1], ret[2], ret[3]
@@ -3905,6 +3942,15 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
 
     context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
+    if options['kwargs'].get('context_birnn', False):
+        context_emb_fwd = get_layer(options['encoder'])[1](tparams, context_emb, options,
+                                            prefix='context_emb_fwd',
+                                            mask=xc_mask_2)
+        context_emb_rev = get_layer(options['encoder'])[1](tparams, context_emb[::-1], options,
+                                            prefix='context_emb_rev',
+                                            mask=xc_mask_2[::-1])
+        context_emb = concatenate([context_emb_fwd[0], context_emb_rev[0][::-1]], axis=context_emb_fwd[0].ndim-1)
+
     if options['kwargs'].get('use_sc_dropout', False):
         context_emb = dropout_layer(context_emb, use_noise, trng, p=1.0-options['kwargs'].get('use_sc_dropout_p', 0.5))
 
@@ -3942,7 +3988,11 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
         outs = [init_state, ctx, context_emb, init_memory]
     else:
         outs = [init_state, ctx, context_emb]
-    f_init_2 = theano.function([x, xc, x_mask, xc_mask, xc_mask_3], outs, name='f_init_2', profile=profile)
+    if options['kwargs'].get('context_birnn', False):
+        ins = [x, xc, x_mask, xc_mask, xc_mask_2, xc_mask_3]
+    else:
+        ins = [x, xc, x_mask, xc_mask, xc_mask_3]
+    f_init_2 = theano.function(ins, outs, name='f_init_2', profile=profile)
     print 'Done'
 
     y = tensor.vector('y_sampler', dtype='int64')
@@ -4020,7 +4070,10 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, xc_mask_2,
     sample = []
 
     # get initial state of decoder rnn and encoder context
-    ret = f_init_2(x, xc, x_mask, xc_mask, xc_mask_3)
+    if options['kwargs'].get('context_birnn', False):
+        ret = f_init_2(x, xc, x_mask, xc_mask, xc_mask_2, xc_mask_3)
+    else:
+        ret = f_init_2(x, xc, x_mask, xc_mask, xc_mask_3)    
     if options['decoder'].startswith('lstm'):
         next_state, ctx, sc, next_memory = ret[0], ret[1], ret[2], ret[3]
     else:
