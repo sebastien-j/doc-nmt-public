@@ -4053,7 +4053,7 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, xc_mask_2,
 ########
 
 # calculate the log probablities on a given corpus using translation model
-def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
+def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=False):
     probs = []
 
     n_done = 0
@@ -4077,7 +4077,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=True):
 
     return numpy.array(probs)
 
-def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng, multibleu, fname, maxlen=200, verbose=True):
+def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng, multibleu, fname, maxlen=200, verbose=False):
     n_done = 0
     full_samples = numpy.zeros((0, maxlen), dtype=numpy.float32)
 
@@ -4424,13 +4424,13 @@ def train(rng=123,
         #ipdb.set_trace()
         try:
             valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                   multibleu, fname=valid_fname, maxlen=ml, verbose=True)
+                   multibleu, fname=valid_fname, maxlen=ml, verbose=False)
         except:
             valid_out = ''
             valid_bleu = 0.0
 
         valid_errs = pred_probs(f_log_probs, prepare_data,
-                                model_options, valid, verbose=True)
+                                model_options, valid, verbose=False)
         valid_err = valid_errs.mean()
 
         print 'Valid ', valid_err
@@ -4547,7 +4547,7 @@ def train(rng=123,
                 multibleu = model_options['kwargs'].get('multibleu', "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl")
                 try:
                     valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                           multibleu, fname=valid_fname, maxlen=ml, verbose=True)
+                           multibleu, fname=valid_fname, maxlen=ml, verbose=False)
                 except:
                     valid_out = ''
                     valid_bleu = 0.0
@@ -4566,7 +4566,7 @@ def train(rng=123,
                         break
 
                 valid_errs = pred_probs(f_log_probs, prepare_data,
-                                        model_options, valid, verbose=True)
+                                        model_options, valid, verbose=False)
                 valid_err = valid_errs.mean()
 
                 if numpy.isnan(valid_err):
