@@ -3660,7 +3660,6 @@ def lstm_cond_v4_layer(tparams, state_below, options, prefix='lstm_cond_v4',
     assert 'sc' in kwargs
     sc = kwargs['sc']
     assert 'sc_mask' in kwargs
-    sc_mask = kwargs['sc_mask']
 
     assert context, 'Context must be provided'
     assert context.ndim == 3, \
@@ -3679,8 +3678,7 @@ def lstm_cond_v4_layer(tparams, state_below, options, prefix='lstm_cond_v4',
     # mask
     if mask is None:  # sampling or beamsearch
         mask = tensor.alloc(1., state_below.shape[0], 1)
-    if kwargs['sc_mask'] is None:
-        sc_mask = tensor.alloc(1., state_below.shape[0], 1)
+    sc_mask = kwargs['sc_mask']
 
     dim = tparams[_p(prefix,'U')].shape[0]
 
@@ -3750,7 +3748,8 @@ def lstm_cond_v4_layer(tparams, state_below, options, prefix='lstm_cond_v4',
         sc_alpha = tensor.dot(sc_pctx__, U_sc_att)+c_sc_tt
         sc_alpha = sc_alpha.reshape([sc_alpha.shape[0], sc_alpha.shape[1]])
         sc_alpha = tensor.exp(sc_alpha)
-        sc_alpha = sc_alpha * sc_mask
+        if sc_mask is not None:
+            sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
         # conpute the weighted averages - current context to gru
@@ -4239,6 +4238,7 @@ def gen_sample(tparams, f_init, f_next, x, xc, options, trng=None, k=1, maxlen=3
             inps = [next_w, ctx, next_state, sc]
         #print 'D', next_w.shape, ctx.shape, next_state.shape, sc.shape, next_memory.shape
         ret = f_next(*inps)
+        #print 'E'
         if options['decoder'].startswith('lstm'):
             next_p, next_w, next_state, next_memory = ret[0], ret[1], ret[2], ret[3]
         else:
@@ -4951,9 +4951,9 @@ def train(rng=123,
                 for jj in xrange(numpy.minimum(5, x.shape[1])):
                     stochastic = True
                     # Could possibly be a bit faster if we knew the max number of words in the context sentences
+                    # print x[:lengths_x[jj]+1, jj][:, None], xc[:lengths_xc[jj]+1, jj][:, None]
                     sample, score = gen_sample(tparams, f_init, f_next,
-                                               x[:lengths_x[jj]+1, jj][:, None], xc[:lengths_xc[jj], jj:jj+1, :],
-                                               xc_mask[:lengths_xc[jj], jj:jj+1, :],
+                                               x[:lengths_x[jj]+1, jj][:, None], xc[:lengths_xc[jj]+1, jj][:, None],
                                                model_options, trng=trng, k=1,
                                                maxlen=30,
                                                stochastic=stochastic,
