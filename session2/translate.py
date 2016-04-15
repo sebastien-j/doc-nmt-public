@@ -33,7 +33,7 @@ def translate_model(queue, rqueue, pid, model, options, k, normalize):
         # sample given an input sequence and obtain scores
         sample, score = gen_sample(tparams, f_init, f_next,
                                    numpy.array(seq).reshape([len(seq), 1]),
-                                   options, trng=trng, k=k, maxlen=200,
+                                   options, trng=trng, k=k, maxlen=100,
                                    stochastic=False, argmax=False)
 
         # normalize scores according to sequence lengths
