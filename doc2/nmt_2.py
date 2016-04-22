@@ -3925,10 +3925,22 @@ def build_model(tparams, options):
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
 
-    emb_c = tparams['Wemb'][xc.flatten()]
-    emb_c = emb_c.reshape([n_timesteps_context, n_samples, options['dim_word']])
+    if options['kwargs'].get('tc', False):
+        if options['kwargs'].get('new_target_embs', False):
+            emb_c = tparams['Wemb_dec_sc'][xc.flatten()]
+            emb_cr = tparams['Wemb_dec_sc'][xcr.flatten()]
+        else:
+            emb_c = tparams['Wemb_dec'][xc.flatten()]
+            emb_cr = tparams['Wemb_dec'][xcr.flatten()]
+    else:
+        if options['kwargs'].get('new_source_embs', False):
+            emb_c = tparams['Wemb_sc'][xc.flatten()]
+            emb_cr = tparams['Wemb_sc'][xcr.flatten()]
+        else:
+            emb_c = tparams['Wemb'][xc.flatten()]
+            emb_cr = tparams['Wemb'][xcr.flatten()]
 
-    emb_cr = tparams['Wemb'][xcr.flatten()]
+    emb_c = emb_c.reshape([n_timesteps_context, n_samples, options['dim_word']])
     emb_cr = emb_cr.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
     if options['kwargs'].get('use_word_dropout', False):
@@ -4069,9 +4081,22 @@ def build_sampler(tparams, options, trng, use_noise=None):
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
 
-    emb_c = tparams['Wemb'][xc.flatten()]
+    if options['kwargs'].get('tc', False):
+        if options['kwargs'].get('new_target_embs', False):
+            emb_c = tparams['Wemb_dec_sc'][xc.flatten()]
+            emb_cr = tparams['Wemb_dec_sc'][xcr.flatten()]
+        else:
+            emb_c = tparams['Wemb_dec'][xc.flatten()]
+            emb_cr = tparams['Wemb_dec'][xcr.flatten()]
+    else:
+        if options['kwargs'].get('new_source_embs', False):
+            emb_c = tparams['Wemb_sc'][xc.flatten()]
+            emb_cr = tparams['Wemb_sc'][xcr.flatten()]
+        else:
+            emb_c = tparams['Wemb'][xc.flatten()]
+            emb_cr = tparams['Wemb'][xcr.flatten()]
+
     emb_c = emb_c.reshape([n_timesteps_context, n_samples, options['dim_word']])
-    emb_cr = tparams['Wemb'][xcr.flatten()]
     emb_cr = emb_cr.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
     if options['kwargs'].get('use_word_dropout', False):
@@ -4344,9 +4369,22 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
 
-    emb_c = tparams['Wemb'][xc.flatten()]
+    if options['kwargs'].get('tc', False):
+        if options['kwargs'].get('new_target_embs', False):
+            emb_c = tparams['Wemb_dec_sc'][xc.flatten()]
+            emb_cr = tparams['Wemb_dec_sc'][xcr.flatten()]
+        else:
+            emb_c = tparams['Wemb_dec'][xc.flatten()]
+            emb_cr = tparams['Wemb_dec'][xcr.flatten()]
+    else:
+        if options['kwargs'].get('new_source_embs', False):
+            emb_c = tparams['Wemb_sc'][xc.flatten()]
+            emb_cr = tparams['Wemb_sc'][xcr.flatten()]
+        else:
+            emb_c = tparams['Wemb'][xc.flatten()]
+            emb_cr = tparams['Wemb'][xcr.flatten()]
+
     emb_c = emb_c.reshape([n_timesteps_context, n_samples, options['dim_word']])
-    emb_cr = tparams['Wemb'][xcr.flatten()]
     emb_cr = emb_cr.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
     if options['kwargs'].get('use_word_dropout', False):
@@ -4367,7 +4405,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
 
     # concatenate forward and backward rnn hidden states
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
-    ctx_c = concatenate([proj[0], proj_cr[0][::-1]], axis=proj_c[0].ndim-1)
+    ctx_c = concatenate([proj_c[0], proj_cr[0][::-1]], axis=proj_c[0].ndim-1)
 
     # get the input for decoder rnn initializer mlp
     #ctx_mean = ctx.mean(0)
@@ -4540,18 +4578,15 @@ def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_
         x, x_mask, y, y_mask, xc, xc_mask, lengths_x, lengths_y, lengths_xc = prepare_data(x, y, xc,
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'])
-
         samples = gen_sample_2(tparams, f_init_2, f_next_2,
                                    x, xc, x_mask, xc_mask,
                                    options, trng=trng,
                                    maxlen=maxlen)
 
-
         full_samples = numpy.vstack((full_samples, samples))
         if verbose:
             print >>sys.stderr, '%d samples computed' % (n_done)
 
-        #ipdb.set_trace()
     with open(fname, 'w') as f:
         for ii in xrange(len(full_samples)):
             sentence = []
@@ -4874,7 +4909,6 @@ def train(rng=123,
         ml = model_options['kwargs'].get('valid_maxlen', 100)
         valid_fname = model_options['kwargs'].get('valid_output', 'output/valid_output')
         multibleu = model_options['kwargs'].get('multibleu', "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl")
-        #ipdb.set_trace()
         try:
             valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
                    multibleu, fname=valid_fname, maxlen=ml, verbose=False)
@@ -5000,7 +5034,7 @@ def train(rng=123,
                 multibleu = model_options['kwargs'].get('multibleu', "/home/sebastien/Documents/Git/mosesdecoder/scripts/generic/multi-bleu.perl")
                 try:
                     valid_out, valid_bleu = greedy_decoding(model_options, valid_datasets[3], valid_noshuf, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng,
-                           multibleu, fname=valid_fname, maxlen=ml, verbose=False)
+                       multibleu, fname=valid_fname, maxlen=ml, verbose=False)
                 except:
                     valid_out = ''
                     valid_bleu = 0.0
