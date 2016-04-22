@@ -2028,6 +2028,7 @@ def train(rng=123,
             # verbose
             if numpy.mod(uidx, dispFreq) == 0:
                 print 'Epoch ', eidx, 'Update ', uidx, 'Cost ', cost, 'UD ', ud
+                sys.stdout.flush()
 
             # save the best model so far
             if numpy.mod(uidx, saveFreq) == 0:
@@ -2146,6 +2147,7 @@ def train(rng=123,
                     print 'Valid ', valid_err
                     print 'Valid BLEU', valid_out
                     print 'Best valid BLEU', numpy.array(history_errs).max()
+                sys.stdout.flush()
 
             # finish after this many updates
             if uidx >= finish_after:
