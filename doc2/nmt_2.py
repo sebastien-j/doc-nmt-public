@@ -4019,7 +4019,7 @@ def build_model(tparams, options):
     # weighted averages of source context
     tsc = proj[4]
 
-    opt_ret['ctx_alphas'] = proj[5] #return h, ctx_, alpha.T, c, tsc, sc_alpha.T 
+    opt_ret['ctx_alphas'] = proj[5] #return h, ctx_, alpha.T, c, tsc, sc_alpha.T
 
     # compute word probabilities
     logit_lstm = get_layer('ff')[1](tparams, proj_h, options,
@@ -4040,8 +4040,8 @@ def build_model(tparams, options):
     mask_sc = get_layer('ff')[1](tparams, tsc, options,
                                    prefix='ff_mask_sc', activ='linear')
     sc_mask = tensor.nnet.sigmoid(mask_lstm+mask_prev+mask_ctx+mask_sc)
+    opt_ret['sc_mask'] = sc_mask
     logit_sc = sc_mask * logit_sc
-                                   
     logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
 
     if options['use_dropout']:
