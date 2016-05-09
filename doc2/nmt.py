@@ -17,6 +17,8 @@ import time
 
 import subprocess
 
+import nmt_ctx_only
+
 from collections import OrderedDict
 
 from data_iterator import TextIterator
@@ -4611,8 +4613,25 @@ def train(rng=123,
                              maxlen=2000, shuffle=False, tc=model_options['kwargs'].get('tc', False))
     print 'Building model'
     params = init_params(model_options)
+
+    # Load pre-trained parameters (from nmt_ctx_only.py)
+    if model_options['kwargs'].get('pretrained_model', None) is not None:
+        print 'Reloading pretrained context attention parameters'
+        with open(model_options['kwargs']['pretrained_model']+'.pkl', 'rb') as f:
+            old_options = pkl.load(f)
+        old_params = nmt_ctx_only.init_params(old_options)
+        old_params = load_params(model_options['kwargs']['pretrained_model'], old_params)
+
+        params['decoder_Wd_sc_att'] = old_params['decoder_Wd_att']
+        params['decoder_U_sc_att'] = old_params['decoder_U_att']
+        params['decoder_c_sc_tt'] = old_params['decoder_c_tt']
+        params['decoder_Wc_sc_att'] = old_params['decoder_Wc_att']
+        params['decoder_b_sc_att'] = old_params['decoder_b_att']
+        params['decoder_Wi_sc_att'] = old_params['decoder_Wi_att']
+
     # reload parameters
     if reload_ and os.path.exists(saveto):
+        print "Loading params"
         params = load_params(saveto, params)
 
     tparams = init_tparams(params)
