@@ -4940,6 +4940,12 @@ def train(rng=123,
              opt_ret['dec_alphas'].sum(0))**2).sum(1).mean()
         cost += alpha_reg
 
+    if model_options['kwargs'].get('ctx_sqrt_c', 0.) > 0.:
+        print 'Using ctx_sqrt_reg'
+        ctx_sqrt_c = theano.shared(numpy.float32(model_options['kwargs']['ctx_sqrt_c']), name='ctx_sqrt_c')
+        ctx_sqrt_reg = ctx_sqrt_c * ((opt_ret['ctx_alphas'] * xc_mask_2.T[None,:,:])**(1./2)).sum(0).sum(1).mean() # After sum(0), dim 2 -> 1
+        cost += ctx_sqrt_reg
+
     # after all regularizers - compile the computational graph for cost
     print 'Building f_cost...',
     f_cost = theano.function(inps, cost, profile=profile)
