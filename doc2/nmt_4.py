@@ -4179,7 +4179,7 @@ def lstm_cond_v8_layer(tparams, state_below, options, prefix='lstm_cond_v8',
         cos_sim = (src_words_wa[None,:,:] * ctx_words).sum(2)
         sc_alpha = tensor.exp(cos_sim)
         if sc_mask is not None:
-            sc_alpha = cos_sim * sc_mask
+            sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
         # conpute the weighted averages - current context to gru
@@ -4380,7 +4380,7 @@ def lstm_cond_v9_layer(tparams, state_below, options, prefix='lstm_cond_v9',
         cos_sim = (src_words_wa[None,:,:] * ctx_words).sum(2)
         sc_alpha = tensor.exp(cos_sim)
         if sc_mask is not None:
-            sc_alpha = cos_sim * sc_mask
+            sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
         # conpute the weighted averages - current context to gru
@@ -4573,7 +4573,7 @@ def lstm_cond_v10_layer(tparams, state_below, options, prefix='lstm_cond_v10',
         cos_sim = (src_words_wa[None,:,:] * ctx_words).sum(2)
         sc_alpha = tensor.exp(cos_sim)
         if sc_mask is not None:
-            sc_alpha = cos_sim * sc_mask
+            sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
         # conpute the weighted averages - current context to gru
