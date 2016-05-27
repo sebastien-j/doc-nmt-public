@@ -1,6 +1,7 @@
 '''
 Build a neural machine translation model with soft attention
 '''
+# v9
 import theano
 import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
@@ -20,6 +21,9 @@ import subprocess
 from collections import OrderedDict
 
 from data_iterator_2 import TextIterator
+
+sys.path.insert(0, '/home/sebastien/Documents/Git/doc-nmt/session2')
+import nmt as session2_nmt
 
 profile = False
 
@@ -102,6 +106,8 @@ layers = {'ff': ('param_init_fflayer', 'fflayer'),
           'lstm_cond_v4': ('param_init_lstm_cond_v4', 'lstm_cond_v4_layer'),
           'lstm_cond_v5': ('param_init_lstm_cond_v5', 'lstm_cond_v5_layer'),
           'lstm_cond_v8': ('param_init_lstm_cond_v8', 'lstm_cond_v8_layer'),
+          'lstm_cond_v9': ('param_init_lstm_cond_v9', 'lstm_cond_v9_layer'),
+          'lstm_cond_v10': ('param_init_lstm_cond_v10', 'lstm_cond_v10_layer'),
           }
 
 
@@ -4232,6 +4238,394 @@ def lstm_cond_v8_layer(tparams, state_below, options, prefix='lstm_cond_v8',
             strict=True)
     return rval
 
+# Conditional LSTM layer with Attention
+def param_init_lstm_cond_v9(options, params, prefix='lstm_cond_v9',
+                        nin=None, dim=None, dimctx=None, rng=None):
+    if nin is None:
+        nin = options['dim']
+    if dim is None:
+        dim = options['dim']
+    if dimctx is None:
+        dimctx = options['dim']
+    # In the future, we may want to allow flexibility for the dim of the second context. Now ctxdim.
+
+    params = param_init_lstm(options, params, prefix, nin=nin, dim=dim, rng=rng)
+
+    # context to LSTM
+    Wc = norm_weight(dimctx, dim*4, rng=rng)
+    params[_p(prefix, 'Wc')] = Wc
+
+    # attention: prev -> hidden
+    Wi_att = norm_weight(nin, dimctx, rng=rng)
+    params[_p(prefix, 'Wi_att')] = Wi_att
+
+    # attention: context -> hidden
+    Wc_att = norm_weight(dimctx, rng=rng)
+    params[_p(prefix, 'Wc_att')] = Wc_att
+
+    # attention: LSTM -> hidden
+    Wd_att = norm_weight(dim, dimctx, rng=rng)
+    params[_p(prefix, 'Wd_att')] = Wd_att
+
+    # attention: hidden bias
+    b_att = numpy.zeros((dimctx,)).astype('float32')
+    params[_p(prefix, 'b_att')] = b_att
+
+    # attention:
+    U_att = norm_weight(dimctx, 1, rng=rng)
+    params[_p(prefix, 'U_att')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_tt')] = c_att
+
+    Wr = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Wr')] = Wr
+    Wrr = norm_weight(dim, dim, rng=rng)
+    params[_p(prefix, 'Wrr')] = Wrr
+    params[_p(prefix,'br')] = numpy.zeros((dim,)).astype('float32')
+
+    Ws = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Ws')] = Ws
+    return params
+
+def lstm_cond_v9_layer(tparams, state_below, options, prefix='lstm_cond_v9',
+                   mask=None, context=None, one_step=False, init_state=None, init_memory=None,
+                   context_mask=None, **kwargs):
+
+    assert 'sc_mask' in kwargs # sc: timesteps x n_samples
+    sc_mask = kwargs['sc_mask']
+
+    assert 'src_' in kwargs
+    src_ = kwargs['src_']
+
+    assert 'ctx_words_' in kwargs
+    ctx_words_ = kwargs['ctx_words_']
+
+    assert context, 'Context must be provided'
+    assert context.ndim == 3, \
+        'Context must be 3-d: #annotation x #sample x dim'
+
+    if one_step:
+        assert init_state, 'previous state must be provided'
+        assert init_memory, 'previous cell must be provided'
+
+    nsteps = state_below.shape[0]
+    if state_below.ndim == 3:
+        n_samples = state_below.shape[1]
+    else:
+        n_samples = 1
+
+    # mask
+    if mask is None:  # sampling or beamsearch
+        mask = tensor.alloc(1., state_below.shape[0], 1)
+
+    dim = tparams[_p(prefix,'U')].shape[0]
+
+    # initial/previous state
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
+    if init_memory is None:
+        init_memory = tensor.alloc(0., n_samples, dim)
+
+    # projected context
+    pctx_ = tensor.dot(context, tparams[_p(prefix, 'Wc_att')]) + \
+        tparams[_p(prefix, 'b_att')]
+
+    def _slice(_x, n, dim):
+        if _x.ndim == 3:
+            return _x[:, :, n*dim:(n+1)*dim]
+        return _x[:, n*dim:(n+1)*dim]
+
+    # projected x into lstm
+    state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + \
+        tparams[_p(prefix, 'b')]
+    # projected x into attention module
+    state_belowc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_att')])
+
+    # step function to be used by scan
+    # arguments    | sequences      |  outputs-info   | non-seqs ...
+    def _step_slice(m_, x_, xc_,
+                    h_, ctx_, alpha_, c_, tsc, sc_alpha_,
+                    pctx_, cc_, src_, ctx_words_,
+                    U, Wc, Wd_att, U_att, c_tt, Wr, Wrr, br, Ws):
+
+        # Compute attention separately
+
+        # attention
+        # project previous hidden state
+        pstate_ = tensor.dot(h_, Wd_att)
+
+        # add projected context
+        pctx__ = pctx_ + pstate_[None, :, :]
+
+        # add projected previous output
+        pctx__ += xc_
+        pctx__ = tensor.tanh(pctx__)
+
+        # compute alignment weights
+        alpha = tensor.dot(pctx__, U_att)+c_tt
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        alpha = tensor.exp(alpha)
+        if context_mask:
+            alpha = alpha * context_mask
+        alpha = alpha / alpha.sum(0, keepdims=True)
+
+        # conpute the weighted averages - current context to gru
+        ctx_ = (cc_ * alpha[:, :, None]).sum(0)
+
+        src_words_wa = (src_ * alpha[:, :, None]).sum(0)
+        src_words_wa = src_words_wa / tensor.sqrt((src_words_wa**2).sum(1))[:, None] # Norm 1
+        
+        ctx_words = ctx_words_ / tensor.sqrt((ctx_words_**2).sum(2))[:,:,None] # Norm 1
+        
+        cos_sim = (src_words_wa[None,:,:] * ctx_words).sum(2)
+        sc_alpha = tensor.exp(cos_sim)
+        if sc_mask is not None:
+            sc_alpha = cos_sim * sc_mask
+        sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
+
+        # conpute the weighted averages - current context to gru
+        tsc = (ctx_words_ * sc_alpha[:, :, None]).sum(0)
+        # conditional lstm layer computations
+        preact = tensor.dot(h_, U)
+        preact += x_
+        preact += tensor.dot(ctx_, Wc)
+
+        i = tensor.nnet.sigmoid(_slice(preact, 0, dim))
+        f = tensor.nnet.sigmoid(_slice(preact, 1, dim))
+        o = tensor.nnet.sigmoid(_slice(preact, 2, dim))
+        c = tensor.tanh(_slice(preact, 3, dim))
+
+        c = f * c_ + i * c
+        c = m_[:, None] * c + (1. - m_)[:, None] * c_
+
+        r = tensor.nnet.sigmoid(tensor.dot(tsc, Wr) + tensor.dot(c, Wrr) + br)
+
+        h = o * tensor.tanh(c + r * tensor.dot(tsc, Ws))
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
+
+        return h, ctx_, alpha.T, c, tsc, sc_alpha.T
+
+    seqs = [mask, state_below_, state_belowc]
+    _step = _step_slice
+
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'Wd_att')],
+                   tparams[_p(prefix, 'U_att')],
+                   tparams[_p(prefix, 'c_tt')],
+                   tparams[_p(prefix, 'Wr')],
+                   tparams[_p(prefix, 'Wrr')],
+                   tparams[_p(prefix, 'br')],
+                   tparams[_p(prefix, 'Ws')]]
+
+    if one_step:
+        rval = _step(*(
+            seqs+[init_state, None, None, init_memory, None, None, pctx_, context, src_, ctx_words_]+shared_vars))
+    else:
+        rval, updates = theano.scan(
+            _step,
+            sequences=seqs,
+            outputs_info=[init_state,
+                          tensor.alloc(0., n_samples, context.shape[2]),
+                          tensor.alloc(0., n_samples, context.shape[0]),
+                          init_memory,
+                          tensor.alloc(0., n_samples, ctx_words_.shape[2]),
+                          tensor.alloc(0., n_samples, ctx_words_.shape[0]),],
+            non_sequences=[pctx_,
+                           context, src_, ctx_words_]+shared_vars,
+            name=_p(prefix, '_layers'),
+            n_steps=nsteps,
+            profile=profile,
+            strict=True)
+    return rval
+
+# Conditional LSTM layer with Attention
+def param_init_lstm_cond_v10(options, params, prefix='lstm_cond_v10',
+                        nin=None, dim=None, dimctx=None, rng=None):
+    if nin is None:
+        nin = options['dim']
+    if dim is None:
+        dim = options['dim']
+    if dimctx is None:
+        dimctx = options['dim']
+    # In the future, we may want to allow flexibility for the dim of the second context. Now ctxdim.
+
+    params = param_init_lstm(options, params, prefix, nin=nin, dim=dim, rng=rng)
+
+    # context to LSTM
+    Wc = norm_weight(dimctx, dim*4, rng=rng)
+    params[_p(prefix, 'Wc')] = Wc
+
+    # attention: prev -> hidden
+    Wi_att = norm_weight(nin, dimctx, rng=rng)
+    params[_p(prefix, 'Wi_att')] = Wi_att
+
+    # attention: context -> hidden
+    Wc_att = norm_weight(dimctx, rng=rng)
+    params[_p(prefix, 'Wc_att')] = Wc_att
+
+    # attention: LSTM -> hidden
+    Wd_att = norm_weight(dim, dimctx, rng=rng)
+    params[_p(prefix, 'Wd_att')] = Wd_att
+
+    # attention: hidden bias
+    b_att = numpy.zeros((dimctx,)).astype('float32')
+    params[_p(prefix, 'b_att')] = b_att
+
+    # attention:
+    U_att = norm_weight(dimctx, 1, rng=rng)
+    params[_p(prefix, 'U_att')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_tt')] = c_att
+
+    return params
+
+def lstm_cond_v10_layer(tparams, state_below, options, prefix='lstm_cond_v10',
+                   mask=None, context=None, one_step=False, init_state=None, init_memory=None,
+                   context_mask=None, **kwargs):
+
+    assert 'sc_mask' in kwargs # sc: timesteps x n_samples
+    sc_mask = kwargs['sc_mask']
+
+    assert 'src_' in kwargs
+    src_ = kwargs['src_']
+
+    assert 'ctx_words_' in kwargs
+    ctx_words_ = kwargs['ctx_words_']
+
+    assert context, 'Context must be provided'
+    assert context.ndim == 3, \
+        'Context must be 3-d: #annotation x #sample x dim'
+
+    if one_step:
+        assert init_state, 'previous state must be provided'
+        assert init_memory, 'previous cell must be provided'
+
+    nsteps = state_below.shape[0]
+    if state_below.ndim == 3:
+        n_samples = state_below.shape[1]
+    else:
+        n_samples = 1
+
+    # mask
+    if mask is None:  # sampling or beamsearch
+        mask = tensor.alloc(1., state_below.shape[0], 1)
+
+    dim = tparams[_p(prefix,'U')].shape[0]
+
+    # initial/previous state
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
+    if init_memory is None:
+        init_memory = tensor.alloc(0., n_samples, dim)
+
+    # projected context
+    pctx_ = tensor.dot(context, tparams[_p(prefix, 'Wc_att')]) + \
+        tparams[_p(prefix, 'b_att')]
+
+    def _slice(_x, n, dim):
+        if _x.ndim == 3:
+            return _x[:, :, n*dim:(n+1)*dim]
+        return _x[:, n*dim:(n+1)*dim]
+
+    # projected x into lstm
+    state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + \
+        tparams[_p(prefix, 'b')]
+    # projected x into attention module
+    state_belowc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_att')])
+
+    # step function to be used by scan
+    # arguments    | sequences      |  outputs-info   | non-seqs ...
+    def _step_slice(m_, x_, xc_,
+                    h_, ctx_, alpha_, c_, tsc, sc_alpha_,
+                    pctx_, cc_, src_, ctx_words_,
+                    U, Wc, Wd_att, U_att, c_tt):
+
+        # Compute attention separately
+
+        # attention
+        # project previous hidden state
+        pstate_ = tensor.dot(h_, Wd_att)
+
+        # add projected context
+        pctx__ = pctx_ + pstate_[None, :, :]
+
+        # add projected previous output
+        pctx__ += xc_
+        pctx__ = tensor.tanh(pctx__)
+
+        # compute alignment weights
+        alpha = tensor.dot(pctx__, U_att)+c_tt
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        alpha = tensor.exp(alpha)
+        if context_mask:
+            alpha = alpha * context_mask
+        alpha = alpha / alpha.sum(0, keepdims=True)
+
+        # conpute the weighted averages - current context to gru
+        ctx_ = (cc_ * alpha[:, :, None]).sum(0)
+
+        src_words_wa = (src_ * alpha[:, :, None]).sum(0)
+        src_words_wa = src_words_wa / tensor.sqrt((src_words_wa**2).sum(1))[:, None] # Norm 1
+        
+        ctx_words = ctx_words_ / tensor.sqrt((ctx_words_**2).sum(2))[:,:,None] # Norm 1
+        
+        cos_sim = (src_words_wa[None,:,:] * ctx_words).sum(2)
+        sc_alpha = tensor.exp(cos_sim)
+        if sc_mask is not None:
+            sc_alpha = cos_sim * sc_mask
+        sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
+
+        # conpute the weighted averages - current context to gru
+        tsc = (ctx_words_ * sc_alpha[:, :, None]).sum(0)
+        # conditional lstm layer computations
+        preact = tensor.dot(h_, U)
+        preact += x_
+        preact += tensor.dot(ctx_, Wc)
+
+        i = tensor.nnet.sigmoid(_slice(preact, 0, dim))
+        f = tensor.nnet.sigmoid(_slice(preact, 1, dim))
+        o = tensor.nnet.sigmoid(_slice(preact, 2, dim))
+        c = tensor.tanh(_slice(preact, 3, dim))
+
+        c = f * c_ + i * c
+        c = m_[:, None] * c + (1. - m_)[:, None] * c_
+
+        h = o * tensor.tanh(c)
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
+
+        return h, ctx_, alpha.T, c, tsc, sc_alpha.T
+
+    seqs = [mask, state_below_, state_belowc]
+    _step = _step_slice
+
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'Wd_att')],
+                   tparams[_p(prefix, 'U_att')],
+                   tparams[_p(prefix, 'c_tt')]]
+
+    if one_step:
+        rval = _step(*(
+            seqs+[init_state, None, None, init_memory, None, None, pctx_, context, src_, ctx_words_]+shared_vars))
+    else:
+        rval, updates = theano.scan(
+            _step,
+            sequences=seqs,
+            outputs_info=[init_state,
+                          tensor.alloc(0., n_samples, context.shape[2]),
+                          tensor.alloc(0., n_samples, context.shape[0]),
+                          init_memory,
+                          tensor.alloc(0., n_samples, ctx_words_.shape[2]),
+                          tensor.alloc(0., n_samples, ctx_words_.shape[0]),],
+            non_sequences=[pctx_,
+                           context, src_, ctx_words_]+shared_vars,
+            name=_p(prefix, '_layers'),
+            n_steps=nsteps,
+            profile=profile,
+            strict=True)
+    return rval
+
 # initialize all parameters
 def init_params(options):
     params = OrderedDict()
@@ -4255,15 +4649,6 @@ def init_params(options):
                                               dim=options['dim'], rng=rng)
     params = get_layer(options['encoder'])[0](options, params,
                                               prefix='encoder_r',
-                                              nin=options['dim_word'],
-                                              dim=options['dim'], rng=rng)
-
-    params = get_layer(options['encoder'])[0](options, params,
-                                              prefix='encoder_c',
-                                              nin=options['dim_word'],
-                                              dim=options['dim'], rng=rng)
-    params = get_layer(options['encoder'])[0](options, params,
-                                              prefix='encoder_cr',
                                               nin=options['dim_word'],
                                               dim=options['dim'], rng=rng)
     ctxdim = 2 * options['dim']
@@ -4292,7 +4677,7 @@ def init_params(options):
                                 nin=ctxdim, nout=options['dim_word'],
                                 ortho=False, rng=rng)
     params = get_layer('ff')[0](options, params, prefix='ff_logit_sc',
-                            nin=ctxdim, nout=options['dim_word'],
+                            nin=options['dim_word'], nout=options['dim_word'],
                             ortho=False, rng=rng)
 
     if options['kwargs'].get('use_output_sc_mask', True):
@@ -4306,7 +4691,7 @@ def init_params(options):
                                     nin=ctxdim, nout=options['dim_word'],
                                     ortho=False, rng=rng)
         params = get_layer('ff')[0](options, params, prefix='ff_mask_sc',
-                                nin=ctxdim, nout=options['dim_word'],
+                                nin=options['dim_word'], nout=options['dim_word'],
                                 ortho=False, rng=rng)
 
     params = get_layer('ff')[0](options, params, prefix='ff_logit',
@@ -4319,6 +4704,7 @@ def init_params(options):
 # build a training model
 def build_model(tparams, options):
     opt_ret = dict()
+    consider_constant = list()
 
     trng = RandomStreams(options['trng'])
     use_noise = theano.shared(numpy.float32(0.))
@@ -4335,9 +4721,6 @@ def build_model(tparams, options):
     xr = x[::-1]
     xr_mask = x_mask[::-1]
 
-    xcr = xc[::-1]
-    xcr_mask = xc_mask[::-1]
-
     n_timesteps = x.shape[0]
     n_timesteps_trg = y.shape[0]
     n_timesteps_context = xc.shape[0]
@@ -4352,30 +4735,17 @@ def build_model(tparams, options):
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
 
-    if options['kwargs'].get('tc', False):
-        if options['kwargs'].get('new_target_embs', False):
-            emb_c = tparams['Wemb_dec_sc'][xc.flatten()]
-            emb_cr = tparams['Wemb_dec_sc'][xcr.flatten()]
-        else:
-            emb_c = tparams['Wemb_dec'][xc.flatten()]
-            emb_cr = tparams['Wemb_dec'][xcr.flatten()]
-    else:
-        if options['kwargs'].get('new_source_embs', False):
-            emb_c = tparams['Wemb_sc'][xc.flatten()]
-            emb_cr = tparams['Wemb_sc'][xcr.flatten()]
-        else:
-            emb_c = tparams['Wemb'][xc.flatten()]
-            emb_cr = tparams['Wemb'][xcr.flatten()]
+    emb_c = tparams['Wemb'][xc.flatten()]
 
     emb_c = emb_c.reshape([n_timesteps_context, n_samples, options['dim_word']])
     ctx_emb = emb_c[:]
-    emb_cr = emb_cr.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
+    #consider_constant.append(ctx_emb)
+    
     if options['kwargs'].get('use_word_dropout', False):
         emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
         embr = dropout_layer(embr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
         emb_c = dropout_layer(emb_c, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
-        emb_cr = dropout_layer(emb_cr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))      
 
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder',
@@ -4385,18 +4755,8 @@ def build_model(tparams, options):
                                              prefix='encoder_r',
                                              mask=xr_mask)
 
-    proj_c = get_layer(options['encoder'])[1](tparams, emb_c, options,
-                                            prefix='encoder_c',
-                                            mask=xc_mask)
-
-    proj_cr = get_layer(options['encoder'])[1](tparams, emb_cr, options,
-                                             prefix='encoder_cr',
-                                             mask=xcr_mask)
-
     # context will be the concatenation of forward and backward rnns
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
-
-    ctx_c = concatenate([proj_c[0], proj_cr[0][::-1]], axis=proj_c[0].ndim-1)
 
     # mean of the context (across time) will be used to initialize decoder rnn
     ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
@@ -4433,7 +4793,7 @@ def build_model(tparams, options):
                                             one_step=False,
                                             init_state=init_state,
                                             init_memory=init_memory,
-                                            sc=ctx_c, sc_mask=xc_mask,
+                                            sc_mask=xc_mask,
                                             src_=src_emb, ctx_words_=ctx_emb)
     # hidden states of the decoder gru
     proj_h = proj[0]
@@ -4489,7 +4849,7 @@ def build_model(tparams, options):
     cost = cost.reshape([y.shape[0], y.shape[1]])
     cost = (cost * y_mask).sum(0)
 
-    return trng, use_noise, x, x_mask, y, y_mask, xc, xc_mask, opt_ret, cost
+    return trng, use_noise, x, x_mask, y, y_mask, xc, xc_mask, opt_ret, cost, consider_constant
 
 
 # build a sampler
@@ -4499,7 +4859,6 @@ def build_sampler(tparams, options, trng, use_noise=None):
 
     # for the backward rnn, we just need to invert x and x_mask
     xr = x[::-1]
-    xcr = xc[::-1]
 
     n_timesteps = x.shape[0]
     n_timesteps_context = xc.shape[0]
@@ -4512,44 +4871,23 @@ def build_sampler(tparams, options, trng, use_noise=None):
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
 
-    if options['kwargs'].get('tc', False):
-        if options['kwargs'].get('new_target_embs', False):
-            emb_c = tparams['Wemb_dec_sc'][xc.flatten()]
-            emb_cr = tparams['Wemb_dec_sc'][xcr.flatten()]
-        else:
-            emb_c = tparams['Wemb_dec'][xc.flatten()]
-            emb_cr = tparams['Wemb_dec'][xcr.flatten()]
-    else:
-        if options['kwargs'].get('new_source_embs', False):
-            emb_c = tparams['Wemb_sc'][xc.flatten()]
-            emb_cr = tparams['Wemb_sc'][xcr.flatten()]
-        else:
-            emb_c = tparams['Wemb'][xc.flatten()]
-            emb_cr = tparams['Wemb'][xcr.flatten()]
+    emb_c = tparams['Wemb'][xc.flatten()]
 
     emb_c = emb_c.reshape([n_timesteps_context, n_samples, options['dim_word']])
     ctx_emb = emb_c[:]
-    emb_cr = emb_cr.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
     if options['kwargs'].get('use_word_dropout', False):
         emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
         embr = dropout_layer(embr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
         emb_c = dropout_layer(emb_c, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
-        emb_cr = dropout_layer(emb_cr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
 
     # encoder
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder')
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
                                              prefix='encoder_r')
-
-    proj_c = get_layer(options['encoder'])[1](tparams, emb_c, options,
-                                            prefix='encoder')
-    proj_cr = get_layer(options['encoder'])[1](tparams, emb_cr, options,
-                                             prefix='encoder_r')
     # concatenate forward and backward rnn hidden states
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
-    ctx_c = concatenate([proj_c[0], proj_cr[0][::-1]], axis=proj_c[0].ndim-1)
 
     # get the input for decoder rnn initializer mlp
     ctx_mean = ctx.mean(0)
@@ -4561,9 +4899,9 @@ def build_sampler(tparams, options, trng, use_noise=None):
                                         prefix='ff_cell', activ='tanh')
     print 'Building f_init...',
     if options['decoder'].startswith('lstm'):
-        outs = [init_state, ctx, ctx_c, init_memory, src_emb, ctx_emb]
+        outs = [init_state, ctx, init_memory, src_emb, ctx_emb]
     else:
-        outs = [init_state, ctx, ctx_c, src_emb, ctx_emb]
+        outs = [init_state, ctx, src_emb, ctx_emb]
     ins = [x, xc]
     
     f_init = theano.function(ins, outs, name='f_init', profile=profile)
@@ -4590,7 +4928,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
                                             one_step=True,
                                             init_state=init_state,
                                             init_memory=init_memory,
-                                            sc=ctx_c, sc_mask=None,
+                                            sc_mask=None,
                                             src_=src_emb, ctx_words_=ctx_emb)
     # get the next hidden state
     next_state = proj[0]
@@ -4641,10 +4979,10 @@ def build_sampler(tparams, options, trng, use_noise=None):
     # sampled word for the next target, next hidden state to be used
     print 'Building f_next..',
     if options['decoder'].startswith('lstm'):
-        inps = [y, ctx, init_state, ctx_c, init_memory, src_emb, ctx_emb]
+        inps = [y, ctx, init_state, init_memory, src_emb, ctx_emb]
         outs = [next_probs, next_sample, next_state, next_memory]
     else:
-        inps = [y, ctx, init_state, ctx_c, src_emb, ctx_emb]
+        inps = [y, ctx, init_state, src_emb, ctx_emb]
         outs = [next_probs, next_sample, next_state]
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
     print 'Done'
@@ -4681,20 +5019,19 @@ def gen_sample(tparams, f_init, f_next, x, xc, options, trng=None, k=1, maxlen=3
 
     #print 'A', x.shape, xc.shape
     if options['decoder'].startswith('lstm'):
-        next_state, ctx0, sc0, next_memory, src_emb, ctx_emb = ret[0], ret[1], ret[2], ret[3], ret[4], ret[5]
+        next_state, ctx0, next_memory, src_emb, ctx_emb = ret[0], ret[1], ret[2], ret[3], ret[4]
     else:
-        next_state, ctx0, sc0, src_emb, ctx_emb = ret[0], ret[1], ret[2], ret[3], ret[4]
+        next_state, ctx0, src_emb, ctx_emb = ret[0], ret[1], ret[2], ret[3]
     next_w = -1 * numpy.ones((1,)).astype('int64')  # bos indicator
     #print 'B', next_w.shape, next_state.shape, ctx0.shape, sc0.shape, next_memory.shape
 
     for ii in xrange(maxlen):
         #print 'C', ctx0.shape, sc0.shape
         ctx = numpy.tile(ctx0, [live_k, 1])
-        sc = numpy.tile(sc0, [live_k, 1])
         if options['decoder'].startswith('lstm'):
-            inps = [next_w, ctx, next_state, sc, next_memory, src_emb, ctx_emb]
+            inps = [next_w, ctx, next_state, next_memory, src_emb, ctx_emb]
         else:
-            inps = [next_w, ctx, next_state, sc, src_emb, ctx_emb]
+            inps = [next_w, ctx, next_state, src_emb, ctx_emb]
         #print 'D', next_w.shape, ctx.shape, next_state.shape, sc.shape, next_memory.shape
         ret = f_next(*inps)
         #print 'E'
@@ -4790,9 +5127,6 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     xr = x[::-1]
     xr_mask = x_mask[::-1]
 
-    xcr = xc[::-1]
-    xcr_mask = xc_mask[::-1]
-
     n_timesteps = x.shape[0]
     n_timesteps_context = xc.shape[0]
     n_samples = x.shape[1]
@@ -4804,44 +5138,24 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
 
-    if options['kwargs'].get('tc', False):
-        if options['kwargs'].get('new_target_embs', False):
-            emb_c = tparams['Wemb_dec_sc'][xc.flatten()]
-            emb_cr = tparams['Wemb_dec_sc'][xcr.flatten()]
-        else:
-            emb_c = tparams['Wemb_dec'][xc.flatten()]
-            emb_cr = tparams['Wemb_dec'][xcr.flatten()]
-    else:
-        if options['kwargs'].get('new_source_embs', False):
-            emb_c = tparams['Wemb_sc'][xc.flatten()]
-            emb_cr = tparams['Wemb_sc'][xcr.flatten()]
-        else:
-            emb_c = tparams['Wemb'][xc.flatten()]
-            emb_cr = tparams['Wemb'][xcr.flatten()]
+    emb_c = tparams['Wemb'][xc.flatten()]
 
     emb_c = emb_c.reshape([n_timesteps_context, n_samples, options['dim_word']])
     ctx_emb = emb_c[:]
-    emb_cr = emb_cr.reshape([n_timesteps_context, n_samples, options['dim_word']])
 
     if options['kwargs'].get('use_word_dropout', False):
         emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
         embr = dropout_layer(embr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
         emb_c = dropout_layer(emb_c, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
-        emb_cr = dropout_layer(emb_cr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
         
     # encoder
     proj = get_layer(options['encoder'])[1](tparams, emb, options,
                                             prefix='encoder', mask=x_mask)
     projr = get_layer(options['encoder'])[1](tparams, embr, options,
                                              prefix='encoder_r', mask=xr_mask)
-    proj_c = get_layer(options['encoder'])[1](tparams, emb_c, options,
-                                            prefix='encoder_c', mask=xc_mask)
-    proj_cr = get_layer(options['encoder'])[1](tparams, emb_cr, options,
-                                             prefix='encoder_cr', mask=xcr_mask)
 
     # concatenate forward and backward rnn hidden states
     ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
-    ctx_c = concatenate([proj_c[0], proj_cr[0][::-1]], axis=proj_c[0].ndim-1)
 
     # get the input for decoder rnn initializer mlp
     #ctx_mean = ctx.mean(0)
@@ -4855,10 +5169,10 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
                                         prefix='ff_cell', activ='tanh')
     print 'Building f_init...',
     if options['decoder'].startswith('lstm'):
-        outs = [init_state, ctx, ctx_c, init_memory, src_emb, ctx_emb]
+        outs = [init_state, ctx, init_memory, src_emb, ctx_emb]
     else:
-        outs = [init_state, ctx, ctx_c, src_emb, ctx_emb]
-    ins = [x, xc, x_mask, xc_mask]
+        outs = [init_state, ctx, src_emb, ctx_emb]
+    ins = [x, xc, x_mask]
     f_init_2 = theano.function(ins, outs, name='f_init_2', profile=profile)
     print 'Done'
 
@@ -4882,7 +5196,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
                                             one_step=True,
                                             init_state=init_state,
                                             init_memory=init_memory,
-                                            sc=ctx_c, sc_mask=xc_mask,
+                                            sc_mask=xc_mask,
                                             src_=src_emb, ctx_words_=ctx_emb)
     # get the next hidden state
     next_state = proj[0]
@@ -4932,10 +5246,10 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     # sampled word for the next target, next hidden state to be used
     print 'Building f_next..',
     if options['decoder'].startswith('lstm'):
-        inps = [y, ctx, init_state, ctx_c, init_memory, x_mask, xc_mask, src_emb, ctx_emb]
+        inps = [y, ctx, init_state, init_memory, x_mask, xc_mask, src_emb, ctx_emb]
         outs = [next_probs, next_sample, next_state, next_memory]
     else:
-        inps = [y, ctx, init_state, ctx_c, x_mask, xc_mask, src_emb, ctx_emb]
+        inps = [y, ctx, init_state, x_mask, xc_mask, src_emb, ctx_emb]
         outs = [next_probs, next_sample, next_state]
     f_next_2 = theano.function(inps, outs, name='f_next_2', profile=profile)
     print 'Done'
@@ -4949,18 +5263,18 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, options, t
     sample = []
 
     # get initial state of decoder rnn and encoder context
-    ret = f_init_2(x, xc, x_mask, xc_mask)    
+    ret = f_init_2(x, xc, x_mask)    
     if options['decoder'].startswith('lstm'):
-        next_state, ctx, sc, next_memory, src_emb, ctx_emb = ret[0], ret[1], ret[2], ret[3], ret[4], ret[5]
+        next_state, ctx, next_memory, src_emb, ctx_emb = ret[0], ret[1], ret[2], ret[3], ret[4]
     else:
-        next_state, ctx, sc, src_emb, ctx_emb = ret[0], ret[1], ret[2], ret[3], ret[4]
+        next_state, ctx, src_emb, ctx_emb = ret[0], ret[1], ret[2], ret[3]
     next_w = -1 * numpy.ones((x.shape[1],)).astype('int64')  # bos indicator
 
     for ii in xrange(maxlen):
         if options['decoder'].startswith('lstm'):
-            inps = [next_w, ctx, next_state, sc, next_memory, x_mask, xc_mask, src_emb, ctx_emb]
+            inps = [next_w, ctx, next_state, next_memory, x_mask, xc_mask, src_emb, ctx_emb]
         else:
-            inps = [next_w, ctx, next_state, sc, x_mask, xc_mask, src_emb, ctx_emb]
+            inps = [next_w, ctx, next_state, x_mask, xc_mask, src_emb, ctx_emb]
         ret = f_next_2(*inps)
         if options['decoder'].startswith('lstm'):
             next_p, next_w, next_state, next_memory = ret[0], ret[1], ret[2], ret[3]
@@ -5253,6 +5567,19 @@ def train(rng=123,
                              maxlen=2000, shuffle=False, tc=model_options['kwargs'].get('tc', False))
     print 'Building model'
     params = init_params(model_options)
+
+    if model_options['kwargs'].get('pretrained_model', None) is not None:
+        print 'Reloading pretrained context attention parameters'
+        with open(model_options['kwargs']['pretrained_model']+'.pkl', 'rb') as f:
+            old_options = pkl.load(f)
+        old_params = session2_nmt.init_params(old_options) # change
+        old_params = load_params(model_options['kwargs']['pretrained_model'], old_params)
+
+        #print params.keys()
+        #print old_params.keys()
+        for key in old_params:
+            params[key] = old_params[key]
+
     # reload parameters
     if reload_ and os.path.exists(saveto):
         params = load_params(saveto, params)
@@ -5262,7 +5589,7 @@ def train(rng=123,
     trng, use_noise, \
         x, x_mask, y, y_mask, xc, xc_mask, \
         opt_ret, \
-        cost = \
+        cost, consider_constant = \
         build_model(tparams, model_options)
     inps = [x, x_mask, y, y_mask, xc, xc_mask]
 
@@ -5301,7 +5628,7 @@ def train(rng=123,
     print 'Done'
 
     print 'Computing gradient...',
-    grads = tensor.grad(cost, wrt=itemlist(tparams))
+    grads = tensor.grad(cost, wrt=itemlist(tparams), consider_constant=consider_constant)
     print 'Done'
 
     # apply gradient clipping here
@@ -5341,7 +5668,7 @@ def train(rng=123,
     uidx = 0
     estop = False
 
-    if reload_:
+    if reload_ or model_options['kwargs'].get('pretrained_model', None) is not None:
         use_noise.set_value(0.)
 
         ml = model_options['kwargs'].get('valid_maxlen', 100)
@@ -5360,7 +5687,10 @@ def train(rng=123,
 
         print 'Valid ', valid_err
         print 'Valid BLEU', valid_out
-        print 'Best valid BLEU', numpy.array(history_errs).max()
+        try:
+            print 'Best valid BLEU', numpy.array(history_errs).max()
+        except:
+            pass
 
     for eidx in xrange(max_epochs):
         n_samples = 0
