@@ -4448,10 +4448,10 @@ def gru_cond_fall0_layer(tparams, state_below, options, prefix='gru_cond_fall0',
     # step function to be used by scan
     # arguments    | sequences      |  outputs-info   | non-seqs ...
     def _step_slice(m_, x_, xx_, xc_, xsc_,
-                    h_, ctx_, alpha_,  c_, tsc, sc_alpha_,
+                    h_, ctx_, alpha_, c_, tsc, sc_alpha_,
                     pctx_, cc_, sc_pctx_, sc_cc_,
                     U, Wc, Wc_sc, Wd_att, Wd_sc_att, U_att, U_sc_att,
-                    c_tt, c_sc_tt, Ux, Wcx, Wcx_xc):
+                    c_tt, c_sc_tt, Ux, Wcx, Wcx_sc):
 
         # attention
         # project previous hidden state
@@ -4510,14 +4510,14 @@ def gru_cond_fall0_layer(tparams, state_below, options, prefix='gru_cond_fall0',
         preactx *= r
         preactx += xx_
         preactx += tensor.dot(ctx_, Wcx)
-        preactx += tensor.dot(ctx_, Wcx_sc)
+        preactx += tensor.dot(tsc, Wcx_sc)
 
         # hidden state proposal, leaky integrate and obtain next hidden state
         h = tensor.tanh(preactx)
         h = u * h_ + (1. - u) * h
         h = m_[:, None] * h + (1. - m_)[:, None] * h_
 
-        return h, ctx_, alpha.T, None, tsc, sc_alpha.T
+        return h, ctx_, alpha.T, c_, tsc, sc_alpha.T
 
     seqs = [mask, state_below_, state_belowx, state_belowc, state_belowsc]
     _step = _step_slice
@@ -4544,7 +4544,7 @@ def gru_cond_fall0_layer(tparams, state_below, options, prefix='gru_cond_fall0',
             outputs_info=[init_state,
                           tensor.alloc(0., n_samples, context.shape[2]),
                           tensor.alloc(0., n_samples, context.shape[0]),
-                          None,
+                          tensor.alloc(0., 1),
                           tensor.alloc(0., n_samples, sc.shape[2]),
                           tensor.alloc(0., n_samples, sc.shape[0]),],
             non_sequences=[pctx_, context, sc_pctx_, sc] + shared_vars,
