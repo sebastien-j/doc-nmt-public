@@ -1,4 +1,5 @@
-ld a neural machine translation model with soft attention
+'''
+Build a neural machine translation model with soft attention
 '''
 import theano
 import theano.tensor as tensor
@@ -4442,7 +4443,88 @@ def gru_cond_fall0_layer(tparams, state_below, options, prefix='gru_cond_fall0',
         tparams[_p(prefix, 'b')]
     # projected x into attention module
     state_belowc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_att')])
-    statep(prefix, 'Wc_sc')],
+    state_belowsc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_sc_att')])
+
+    # step function to be used by scan
+    # arguments    | sequences      |  outputs-info   | non-seqs ...
+    def _step_slice(m_, x_, xx_, xc_, xsc_,
+                    h_, ctx_, alpha_,  c_, tsc, sc_alpha_,
+                    pctx_, cc_, sc_pctx_, sc_cc_,
+                    U, Wc, Wc_sc, Wd_att, Wd_sc_att, U_att, U_sc_att,
+                    c_tt, c_sc_tt, Ux, Wcx, Wcx_xc):
+
+        # attention
+        # project previous hidden state
+        pstate_ = tensor.dot(h_, Wd_att)
+
+        # add projected context
+        pctx__ = pctx_ + pstate_[None, :, :]
+
+        # add projected previous output
+        pctx__ += xc_
+        pctx__ = tensor.tanh(pctx__)
+
+        # compute alignment weights
+        alpha = tensor.dot(pctx__, U_att)+c_tt
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        alpha = tensor.exp(alpha)
+        if context_mask:
+            alpha = alpha * context_mask
+        alpha = alpha / alpha.sum(0, keepdims=True)
+
+        # compute the weighted averages - current context to gru
+        ctx_ = (cc_ * alpha[:, :, None]).sum(0)
+
+        # Now do the same for the neighbouring sentences
+        sc_pstate_ = tensor.dot(h_, Wd_sc_att)
+
+        # add projected context
+        sc_pctx__ = sc_pctx_ + sc_pstate_[None, :, :]
+
+        # add projected previous output
+        sc_pctx__ += xsc_
+        sc_pctx__ = tensor.tanh(sc_pctx__)
+
+        # compute alignment weights
+        sc_alpha = tensor.dot(sc_pctx__, U_sc_att)+c_sc_tt
+        sc_alpha = sc_alpha.reshape([sc_alpha.shape[0], sc_alpha.shape[1]])
+        sc_alpha = tensor.exp(sc_alpha)
+        sc_alpha = sc_alpha * sc_mask
+        sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
+
+        # compute the weighted averages - current context to gru
+        tsc = (sc_cc_ * sc_alpha[:, :, None]).sum(0)
+
+        # conditional gru layer computations
+        preact = tensor.dot(h_, U)
+        preact += x_
+        preact += tensor.dot(ctx_, Wc)
+        preact += tensor.dot(tsc, Wc_sc)
+        preact = tensor.nnet.sigmoid(preact)
+
+        # reset and update gates
+        r = _slice(preact, 0, dim)
+        u = _slice(preact, 1, dim)
+
+        preactx = tensor.dot(h_, Ux)
+        preactx *= r
+        preactx += xx_
+        preactx += tensor.dot(ctx_, Wcx)
+        preactx += tensor.dot(ctx_, Wcx_sc)
+
+        # hidden state proposal, leaky integrate and obtain next hidden state
+        h = tensor.tanh(preactx)
+        h = u * h_ + (1. - u) * h
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
+
+        return h, ctx_, alpha.T, None, tsc, sc_alpha.T
+
+    seqs = [mask, state_below_, state_belowx, state_belowc, state_belowsc]
+    _step = _step_slice
+
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'Wc_sc')],
                    tparams[_p(prefix, 'Wd_att')],
                    tparams[_p(prefix, 'Wd_sc_att')],
                    tparams[_p(prefix, 'U_att')],
