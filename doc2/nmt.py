@@ -103,6 +103,7 @@ layers = {'ff': ('param_init_fflayer', 'fflayer'),
           'lstm_cond_v3': ('param_init_lstm_cond_v3', 'lstm_cond_v3_layer'),
           'lstm_cond_v6': ('param_init_lstm_cond_v6', 'lstm_cond_v6_layer'),
           'lstm_cond_fall0': ('param_init_lstm_fall0', 'lstm_cond_fall0'),
+          'gru_cond_fall0': ('param_init_gru_fall0', 'gru_cond_fall0')
           }
 
 
@@ -680,7 +681,7 @@ def gru_cond_legacy_layer(tparams, state_below, options, prefix='gru_cond_legacy
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
         # conditional gru layer computations
@@ -1218,7 +1219,7 @@ def gru_cond_legacy_layer(tparams, state_below, options, prefix='gru_cond_legacy
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
         # conditional gru layer computations
@@ -1404,7 +1405,7 @@ def gru_cond_legacy_simple_sc_layer(tparams, state_below, options, prefix='gru_c
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
         # conditional gru layer computations
@@ -1766,7 +1767,7 @@ def lstm_cond_legacy_layer(tparams, state_below, options, prefix='lstm_cond_lega
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
         # conditional lstm layer computations
@@ -1938,7 +1939,7 @@ def lstm_cond_legacy_simple_sc_layer(tparams, state_below, options, prefix='lstm
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
         # conditional lstm layer computations
@@ -2114,7 +2115,7 @@ def lstm_cond_legacy_late_sc_layer(tparams, state_below, options, prefix='lstm_c
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
         # conditional lstm layer computations
@@ -2871,7 +2872,7 @@ def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
         sc_pstate_ = tensor.dot(h_, Wd_sc_att)
@@ -2890,7 +2891,7 @@ def lstm_cond_v0_layer(tparams, state_below, options, prefix='lstm_cond_v0',
         sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         tsc = (sc_cc_ * sc_alpha[:, :, None]).sum(0)
 
         # conditional lstm layer computations
@@ -3099,7 +3100,7 @@ def lstm_cond_v1_layer(tparams, state_below, options, prefix='lstm_cond_v1',
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0) # n_samples x 2dim
 
         sc_pstate_ = tensor.dot(h_, Wd_sc_att) + tensor.dot(ctx_, Wctx_sc_att) # Proj of dec hidden state. n_samples x nin
@@ -3119,7 +3120,7 @@ def lstm_cond_v1_layer(tparams, state_below, options, prefix='lstm_cond_v1',
         sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         tsc = (sc_cc_ * sc_alpha[:, :, None]).sum(0)
 
         # conditional lstm layer computations
@@ -3324,7 +3325,7 @@ def lstm_cond_v2_layer(tparams, state_below, options, prefix='lstm_cond_v2',
         sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         tsc = (sc_cc_ * sc_alpha[:, :, None]).sum(0)
 
         # attention
@@ -3346,7 +3347,7 @@ def lstm_cond_v2_layer(tparams, state_below, options, prefix='lstm_cond_v2',
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0) # n_samples x 2dim
 
         # conditional lstm layer computations
@@ -3544,7 +3545,7 @@ def lstm_cond_v3_layer(tparams, state_below, options, prefix='lstm_cond_v3',
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
         sc_pstate_ = tensor.dot(h_, Wd_sc_att)
@@ -3563,7 +3564,7 @@ def lstm_cond_v3_layer(tparams, state_below, options, prefix='lstm_cond_v3',
         sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         tsc = (sc_cc_ * sc_alpha[:, :, None]).sum(0)
 
         # conditional lstm layer computations
@@ -4027,7 +4028,7 @@ def lstm_cond_v6_layer(tparams, state_below, options, prefix='lstm_cond_v6',
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
         sc_pstate_ = tensor.dot(h_, Wd_sc_att)
@@ -4046,7 +4047,7 @@ def lstm_cond_v6_layer(tparams, state_below, options, prefix='lstm_cond_v6',
         sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         tsc = (sc_cc_ * sc_alpha[:, :, None]).sum(0)
 
         # conditional lstm layer computations
@@ -4168,6 +4169,67 @@ def param_init_lstm_cond_fall0(options, params, prefix='lstm_cond_fall0',
     params[_p(prefix, 'sc_Wc')] = sc_Wc
     return params
 
+# Conditional LSTM layer with Attention
+def param_init_lstm_cond_fall0(options, params, prefix='lstm_cond_fall0',
+                        nin=None, dim=None, dimctx=None, rng=None):
+    if nin is None:
+        nin = options['dim']
+    if dim is None:
+        dim = options['dim']
+    if dimctx is None:
+        dimctx = options['dim']
+    # In the future, we may want to allow flexibility for the dim of the second context. Now nin.
+
+    params = param_init_lstm(options, params, prefix, nin=nin, dim=dim, rng=rng)
+
+    # context to LSTM
+    Wc = norm_weight(dimctx, dim*4, rng=rng)
+    params[_p(prefix, 'Wc')] = Wc
+
+    Wc_sc = norm_weight(nin, dim*4, rng=rng)
+    params[_p(prefix, 'Wc_sc')] = Wc_sc
+
+    # attention: prev -> hidden
+    Wi_att = norm_weight(nin, dimctx, rng=rng)
+    params[_p(prefix, 'Wi_att')] = Wi_att
+
+    Wi_sc_att = norm_weight(nin, nin, rng=rng)
+    params[_p(prefix, 'Wi_sc_att')] = Wi_sc_att
+
+    # attention: context -> hidden
+    Wc_att = norm_weight(dimctx, rng=rng)
+    params[_p(prefix, 'Wc_att')] = Wc_att
+
+    Wc_sc_att = norm_weight(nin, rng=rng)
+    params[_p(prefix, 'Wc_sc_att')] = Wc_sc_att
+
+    # attention: LSTM -> hidden
+    Wd_att = norm_weight(dim, dimctx, rng=rng)
+    params[_p(prefix, 'Wd_att')] = Wd_att
+
+    Wd_sc_att = norm_weight(dim, nin, rng=rng)
+    params[_p(prefix, 'Wd_sc_att')] = Wd_sc_att
+
+    # attention: hidden bias
+    b_att = numpy.zeros((dimctx,)).astype('float32')
+    params[_p(prefix, 'b_att')] = b_att
+
+    b_sc_att = numpy.zeros((nin,)).astype('float32')
+    params[_p(prefix, 'b_sc_att')] = b_sc_att
+
+    # attention:
+    U_att = norm_weight(dimctx, 1, rng=rng)
+    params[_p(prefix, 'U_att')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_tt')] = c_att
+
+    U_sc_att = norm_weight(nin, 1, rng=rng)
+    params[_p(prefix, 'U_sc_att')] = U_sc_att
+    c_sc_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_sc_tt')] = c_sc_att
+
+    return params
+
 def lstm_cond_fall0_layer(tparams, state_below, options, prefix='lstm_cond_fall0',
                    mask=None, context=None, one_step=False, init_state=None, init_memory=None,
                    context_mask=None, **kwargs):
@@ -4223,8 +4285,10 @@ def lstm_cond_fall0_layer(tparams, state_below, options, prefix='lstm_cond_fall0
 
     # step function to be used by scan
     # arguments    | sequences      |  outputs-info   | non-seqs ...
-    def _step_slice(m_, x_, xc_, xsc_, h_, ctx_, alpha_, c_, tsc, sc_alpha_, pctx_, cc_, sc_pctx_, sc_cc_,
-                    U, Wc, Wd_att, Wd_sc_att, U_att, U_sc_att, c_tt, c_sc_tt, Wr, Wrr, br, Ws):
+    def _step_slice(m_, x_, xc_, xsc_,
+                    h_, ctx_, alpha_, c_, tsc, sc_alpha_,
+                    pctx_, cc_, sc_pctx_, sc_cc_,
+                    U, Wc, Wc_sc, Wd_att, Wd_sc_att, U_att, U_sc_att, c_tt, c_sc_tt):
 
         # Compute attention separately
 
@@ -4247,9 +4311,10 @@ def lstm_cond_fall0_layer(tparams, state_below, options, prefix='lstm_cond_fall0
             alpha = alpha * context_mask
         alpha = alpha / alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         ctx_ = (cc_ * alpha[:, :, None]).sum(0)
 
+        # Now do the same for the neighbouring sentences
         sc_pstate_ = tensor.dot(h_, Wd_sc_att)
 
         # add projected context
@@ -4266,14 +4331,14 @@ def lstm_cond_fall0_layer(tparams, state_below, options, prefix='lstm_cond_fall0
         sc_alpha = sc_alpha * sc_mask
         sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
 
-        # conpute the weighted averages - current context to gru
+        # compute the weighted averages - current context to gru
         tsc = (sc_cc_ * sc_alpha[:, :, None]).sum(0)
 
         # conditional lstm layer computations
         preact = tensor.dot(h_, U)
         preact += x_
         preact += tensor.dot(ctx_, Wc)
-        preact += tensor.dot(tsc, sc_Wc)
+        preact += tensor.dot(tsc, Wc_sc)
 
         i = tensor.nnet.sigmoid(_slice(preact, 0, dim))
         f = tensor.nnet.sigmoid(_slice(preact, 1, dim))
@@ -4294,16 +4359,13 @@ def lstm_cond_fall0_layer(tparams, state_below, options, prefix='lstm_cond_fall0
 
     shared_vars = [tparams[_p(prefix, 'U')],
                    tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'Wc_sc')],
                    tparams[_p(prefix, 'Wd_att')],
                    tparams[_p(prefix, 'Wd_sc_att')],
                    tparams[_p(prefix, 'U_att')],
                    tparams[_p(prefix, 'U_sc_att')],
                    tparams[_p(prefix, 'c_tt')],
-                   tparams[_p(prefix, 'c_sc_tt')],
-                   tparams[_p(prefix, 'Wr')],
-                   tparams[_p(prefix, 'Wrr')],
-                   tparams[_p(prefix, 'br')],
-                   tparams[_p(prefix, 'Ws')]]
+                   tparams[_p(prefix, 'c_sc_tt')]]
 
     if one_step:
         rval = _step(*(
@@ -4318,171 +4380,241 @@ def lstm_cond_fall0_layer(tparams, state_below, options, prefix='lstm_cond_fall0
                           init_memory,
                           tensor.alloc(0., n_samples, sc.shape[2]),
                           tensor.alloc(0., n_samples, sc.shape[0]),],
-            non_sequences=[pctx_,
-                           context, sc_pctx_, sc]+shared_vars,
+            non_sequences=[pctx_, context, sc_pctx_, sc] + shared_vars,
             name=_p(prefix, '_layers'),
             n_steps=nsteps,
             profile=profile,
             strict=True)
     return rval
-# build a sampler
-def build_sampler(tparams, options, trng, use_noise=None):
-    x = tensor.matrix('x', dtype='int64')
-    xc = tensor.tensor3('xc', dtype='int64')
-    xc_mask = tensor.tensor3('xc_mask', dtype='float32')
-    xc_mask_2 = tensor.matrix('xc_mask_2', dtype='float32')
-    xc_mask_3 = tensor.matrix('xc_mask_3', dtype='float32')
 
-    # for the backward rnn, we just need to invert x and x_mask
-    xr = x[::-1]
+# Conditional GRU layer with Attention
+def param_init_gru_cond_fall0(options, params, prefix='gru_cond_fall0',
+                        nin=None, dim=None, dimctx=None, rng=None):
+    if nin is None:
+        nin = options['dim']
+    if dim is None:
+        dim = options['dim']
+    if dimctx is None:
+        dimctx = options['dim']
 
-    n_timesteps = x.shape[0]
-    n_timesteps_context = xc.shape[0]
-    max_words = xc.shape[2]
-    n_samples = x.shape[1]
+    params = param_init_gru(options, params, prefix, nin=nin, dim=dim, rng=rng)
 
-    if options['kwargs'].get('tc', False):
-        if options['kwargs'].get('new_target_embs', False):
-            context_emb = tparams['Wemb_dec_sc'][xc.flatten()]
-        else:
-            context_emb = tparams['Wemb_dec'][xc.flatten()]
+    # context to LSTM
+    Wc = norm_weight(dimctx, dim*2, rng=rng)
+    params[_p(prefix, 'Wc')] = Wc
+
+    Wc_sc = norm_weight(nin, dim*2, rng=rng)
+    params[_p(prefix, 'Wc_sc')] = Wc_sc
+
+    Wcx = norm_weight(dimctx, dim, rng=rng)
+    params[_p(prefix, 'Wcx')] = Wcx
+
+    Wcx_sc = norm_weight(nin, dim, rng=rng)
+    params[_p(prefix, 'Wcx_sc')] = Wcx_sc
+
+    # attention: prev -> hidden
+    Wi_att = norm_weight(nin, dimctx, rng=rng)
+    params[_p(prefix, 'Wi_att')] = Wi_att
+
+    Wi_sc_att = norm_weight(nin, nin, rng=rng)
+    params[_p(prefix, 'Wi_sc_att')] = Wi_sc_att
+
+    # attention: context -> hidden
+    Wc_att = norm_weight(dimctx, rng=rng)
+    params[_p(prefix, 'Wc_att')] = Wc_att
+
+    Wc_sc_att = norm_weight(nin, rng=rng)
+    params[_p(prefix, 'Wc_sc_att')] = Wc_sc_att
+
+    # attention: LSTM -> hidden
+    Wd_att = norm_weight(dim, dimctx, rng=rng)
+    params[_p(prefix, 'Wd_att')] = Wd_att
+
+    Wd_sc_att = norm_weight(dim, nin, rng=rng)
+    params[_p(prefix, 'Wd_sc_att')] = Wd_sc_att
+
+    # attention: hidden bias
+    b_att = numpy.zeros((dimctx,)).astype('float32')
+    params[_p(prefix, 'b_att')] = b_att
+
+    b_sc_att = numpy.zeros((nin,)).astype('float32')
+    params[_p(prefix, 'b_sc_att')] = b_sc_att
+
+    # attention:
+    U_att = norm_weight(dimctx, 1, rng=rng)
+    params[_p(prefix, 'U_att')] = U_att
+    c_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_tt')] = c_att
+
+    U_sc_att = norm_weight(nin, 1, rng=rng)
+    params[_p(prefix, 'U_sc_att')] = U_sc_att
+    c_sc_att = numpy.zeros((1,)).astype('float32')
+    params[_p(prefix, 'c_sc_tt')] = c_sc_att
+
+    return params
+
+
+def gru_cond_fall0_layer(tparams, state_below, options, prefix='gru_cond_fall0',
+                   mask=None, context=None, one_step=False, init_state=None,
+                   context_mask=None, **kwargs):
+
+    assert 'sc' in kwargs # sc: timesteps x n_samples x dim_sc
+    sc = kwargs['sc']
+    assert 'sc_mask' in kwargs # sc: timesteps x n_samples
+    sc_mask = kwargs['sc_mask']
+
+    assert context, 'Context must be provided'
+    assert context.ndim == 3, \
+        'Context must be 3-d: #annotation x #sample x dim'
+
+    if one_step:
+        assert init_state, 'previous state must be provided'
+
+    nsteps = state_below.shape[0]
+    if state_below.ndim == 3:
+        n_samples = state_below.shape[1]
     else:
-        if options['kwargs'].get('new_source_embs', False):
-            context_emb = tparams['Wemb_sc'][xc.flatten()]
-        else:
-            context_emb = tparams['Wemb'][xc.flatten()]
-    context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
+        n_samples = 1
 
-    context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
+    # mask
+    if mask is None:  # sampling or beamsearch
+        mask = tensor.alloc(1., state_below.shape[0], 1)
 
-    if options['kwargs'].get('context_birnn', False):
-        context_emb_fwd = get_layer(options['encoder'])[1](tparams, context_emb, options,
-                                            prefix='context_emb_fwd',
-                                            mask=xc_mask_2)
-        context_emb_rev = get_layer(options['encoder'])[1](tparams, context_emb[::-1], options,
-                                            prefix='context_emb_rev',
-                                            mask=xc_mask_2[::-1])
-        context_emb = concatenate([context_emb_fwd[0], context_emb_rev[0][::-1]], axis=context_emb_fwd[0].ndim-1)
-    elif options['decoder'] == 'lstm_cond_v6':
-        context_emb = get_layer('ff')[1](tparams, context_emb, options,
-                                    prefix='v6_context_emb', activ='linear')
+    dim = tparams[_p(prefix, 'Wcx')].shape[1]
 
-    if options['kwargs'].get('use_sc_dropout', False):
-        context_emb = dropout_layer(context_emb, use_noise, trng, p=1.0-options['kwargs'].get('use_sc_dropout_p', 0.5))
+    # initial/previous state
+    if init_state is None:
+        init_state = tensor.alloc(0., n_samples, dim)
 
-    # word embedding (source), forward and backward
-    emb = tparams['Wemb'][x.flatten()]
-    emb = emb.reshape([n_timesteps, n_samples, options['dim_word']])
-    embr = tparams['Wemb'][xr.flatten()]
-    embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
+    # projected context
+    pctx_ = tensor.dot(context, tparams[_p(prefix, 'Wc_att')]) + \
+        tparams[_p(prefix, 'b_att')]
+    sc_pctx_ = tensor.dot(sc, tparams[_p(prefix, 'Wc_sc_att')]) + \
+        tparams[_p(prefix, 'b_sc_att')]
 
-    if options['kwargs'].get('use_word_dropout', False):
-        emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
-        embr = dropout_layer(embr, use_noise, trng, p=1.0-options['kwargs'].get('use_word_dropout_p', 0.5))
+    def _slice(_x, n, dim):
+        if _x.ndim == 3:
+            return _x[:, :, n*dim:(n+1)*dim]
+        return _x[:, n*dim:(n+1)*dim]
 
-    # encoder
-    proj = get_layer(options['encoder'])[1](tparams, emb, options,
-                                            prefix='encoder')
-    projr = get_layer(options['encoder'])[1](tparams, embr, options,
-                                             prefix='encoder_r')
+    # projected x into hidden state proposal
+    state_belowx = tensor.dot(state_below, tparams[_p(prefix, 'Wx')]) + \
+        tparams[_p(prefix, 'bx')]
+    # projected x into gru gates
+    state_below_ = tensor.dot(state_below, tparams[_p(prefix, 'W')]) + \
+        tparams[_p(prefix, 'b')]
+    # projected x into attention module
+    state_belowc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_att')])
+    state_belowsc = tensor.dot(state_below, tparams[_p(prefix, 'Wi_sc_att')])
 
-    # concatenate forward and backward rnn hidden states
-    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
+    # step function to be used by scan
+    # arguments    | sequences      |  outputs-info   | non-seqs ...
+    def _step_slice(m_, x_, xx_, xc_, xsc_,
+                    h_, ctx_, alpha_,  c_, tsc, sc_alpha_,
+                    pctx_, cc_, sc_pctx_, sc_cc_,
+                    U, Wc, Wc_sc, Wd_att, Wd_sc_att, U_att, U_sc_att,
+                    c_tt, c_sc_tt, Ux, Wcx, Wcx_xc):
 
-    # get the input for decoder rnn initializer mlp
-    ctx_mean = ctx.mean(0)
-    # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
-    init_state = get_layer('ff')[1](tparams, ctx_mean, options,
-                                    prefix='ff_state', activ='tanh')
-    if options['decoder'].startswith('lstm'):
-        init_memory = get_layer('ff')[1](tparams, ctx_mean, options,
-                                        prefix='ff_cell', activ='tanh')
-    print 'Building f_init...',
-    if options['decoder'].startswith('lstm'):
-        outs = [init_state, ctx, context_emb, init_memory]
+        # attention
+        # project previous hidden state
+        pstate_ = tensor.dot(h_, Wd_att)
+
+        # add projected context
+        pctx__ = pctx_ + pstate_[None, :, :]
+
+        # add projected previous output
+        pctx__ += xc_
+        pctx__ = tensor.tanh(pctx__)
+
+        # compute alignment weights
+        alpha = tensor.dot(pctx__, U_att)+c_tt
+        alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        alpha = tensor.exp(alpha)
+        if context_mask:
+            alpha = alpha * context_mask
+        alpha = alpha / alpha.sum(0, keepdims=True)
+
+        # compute the weighted averages - current context to gru
+        ctx_ = (cc_ * alpha[:, :, None]).sum(0)
+
+        # Now do the same for the neighbouring sentences
+        sc_pstate_ = tensor.dot(h_, Wd_sc_att)
+
+        # add projected context
+        sc_pctx__ = sc_pctx_ + sc_pstate_[None, :, :]
+
+        # add projected previous output
+        sc_pctx__ += xsc_
+        sc_pctx__ = tensor.tanh(sc_pctx__)
+
+        # compute alignment weights
+        sc_alpha = tensor.dot(sc_pctx__, U_sc_att)+c_sc_tt
+        sc_alpha = sc_alpha.reshape([sc_alpha.shape[0], sc_alpha.shape[1]])
+        sc_alpha = tensor.exp(sc_alpha)
+        sc_alpha = sc_alpha * sc_mask
+        sc_alpha = sc_alpha / sc_alpha.sum(0, keepdims=True)
+
+        # compute the weighted averages - current context to gru
+        tsc = (sc_cc_ * sc_alpha[:, :, None]).sum(0)
+
+        # conditional gru layer computations
+        preact = tensor.dot(h_, U)
+        preact += x_
+        preact += tensor.dot(ctx_, Wc)
+        preact += tensor.dot(tsc, Wc_sc)
+        preact = tensor.nnet.sigmoid(preact)
+
+        # reset and update gates
+        r = _slice(preact, 0, dim)
+        u = _slice(preact, 1, dim)
+
+        preactx = tensor.dot(h_, Ux)
+        preactx *= r
+        preactx += xx_
+        preactx += tensor.dot(ctx_, Wcx)
+        preactx += tensor.dot(ctx_, Wcx_sc)
+
+        # hidden state proposal, leaky integrate and obtain next hidden state
+        h = tensor.tanh(preactx)
+        h = u * h_ + (1. - u) * h
+        h = m_[:, None] * h + (1. - m_)[:, None] * h_
+
+        return h, ctx_, alpha.T, None, tsc, sc_alpha.T
+
+    seqs = [mask, state_below_, state_belowx, state_belowc, state_belowsc]
+    _step = _step_slice
+
+    shared_vars = [tparams[_p(prefix, 'U')],
+                   tparams[_p(prefix, 'Wc')],
+                   tparams[_p(prefix, 'Wc_sc')],
+                   tparams[_p(prefix, 'Wd_att')],
+                   tparams[_p(prefix, 'Wd_sc_att')],
+                   tparams[_p(prefix, 'U_att')],
+                   tparams[_p(prefix, 'U_sc_att')],
+                   tparams[_p(prefix, 'c_tt')],
+                   tparams[_p(prefix, 'c_sc_tt')],
+                   tparams[_p(prefix, 'Ux')],
+                   tparams[_p(prefix, 'Wcx')],
+                   tparams[_p(prefix, 'Wcx_sc')]]
+    if one_step:
+        rval = _step(*(
+            seqs+[init_state, None, None, None, None, None, pctx_, context, sc_pctx_, sc]+shared_vars))
     else:
-        outs = [init_state, ctx, context_emb]
-    if options['kwargs'].get('context_birnn', False):
-        ins = [x, xc, xc_mask, xc_mask_2, xc_mask_3]
-    else:
-        ins = [x, xc, xc_mask, xc_mask_3]
-    
-    f_init = theano.function(ins, outs, name='f_init', profile=profile)
-    print 'Done'
-
-    # x: 1 x 1
-    y = tensor.vector('y_sampler', dtype='int64')
-    init_state = tensor.matrix('init_state', dtype='float32')
-
-    # if it's the first word, emb should be all zero and it is indicated by -1
-    emb = tensor.switch(y[:, None] < 0,
-                        tensor.alloc(0., 1, tparams['Wemb_dec'].shape[1]),
-                        tparams['Wemb_dec'][y])
-    emb_copy = emb
-    if options['kwargs'].get('use_dec_word_dropout', False):
-        emb = dropout_layer(emb, use_noise, trng, p=1.0-options['kwargs'].get('use_dec_word_dropout_p', 0.5))
-
-    if not options['decoder'].startswith('lstm'):
-        init_memory = None
-    # apply one step of conditional gru with attention
-    proj = get_layer(options['decoder'])[1](tparams, emb, options,
-                                            prefix='decoder',
-                                            mask=None, context=ctx,
-                                            one_step=True,
-                                            init_state=init_state,
-                                            init_memory=init_memory,
-                                            sc=context_emb, sc_mask=xc_mask_2)
-    # get the next hidden state
-    next_state = proj[0]
-    if options['decoder'].startswith('lstm'):
-        next_memory = proj[3]
-
-    # get the weighted averages of context for this target word y
-    ctxs = proj[1]
-
-    tsc = proj[4]
-
-    logit_lstm = get_layer('ff')[1](tparams, next_state, options,
-                                    prefix='ff_logit_lstm', activ='linear')
-    logit_prev = get_layer('ff')[1](tparams, emb_copy, options,
-                                    prefix='ff_logit_prev', activ='linear')
-    logit_ctx = get_layer('ff')[1](tparams, ctxs, options,
-                                   prefix='ff_logit_ctx', activ='linear')
-    if options['kwargs'].get('use_logit_sc', True):
-        logit_sc = get_layer('ff')[1](tparams, tsc, options,
-                                       prefix='ff_logit_sc', activ='linear')
-        logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx+logit_sc)
-    else:
-        logit = tensor.tanh(logit_lstm+logit_prev+logit_ctx)
-    if options['use_dropout']:
-        logit = dropout_layer(logit, use_noise, trng, p=1.0-options['kwargs'].get('use_dropout_p', 0.5))
-    if options['kwargs'].get('very_late', False):
-        vl_mask = get_layer('ff')[1](tparams, tsc, options,
-                                   prefix='ff_very_late', activ='linear')
-        logit *= tensor.nnet.sigmoid(vl_mask)
-    logit = get_layer('ff')[1](tparams, logit, options,
-                               prefix='ff_logit', activ='linear')
-
-    # compute the softmax probability
-    next_probs = tensor.nnet.softmax(logit)
-
-    # sample from softmax distribution to get the sample
-    next_sample = trng.multinomial(pvals=next_probs).argmax(1)
-
-    # compile a function to do the whole thing above, next word probability,
-    # sampled word for the next target, next hidden state to be used
-    print 'Building f_next..',
-    if options['decoder'].startswith('lstm'):
-        inps = [y, ctx, init_state, context_emb, init_memory, xc_mask_2]
-        outs = [next_probs, next_sample, next_state, next_memory]
-    else:
-        inps = [y, ctx, init_state, context_emb, xc_mask_2]
-        outs = [next_probs, next_sample, next_state]
-    f_next = theano.function(inps, outs, name='f_next', profile=profile)
-    print 'Done'
-
-    return f_init, f_next
-
+        rval, updates = theano.scan(
+            _step,
+            sequences=seqs,
+            outputs_info=[init_state,
+                          tensor.alloc(0., n_samples, context.shape[2]),
+                          tensor.alloc(0., n_samples, context.shape[0]),
+                          None,
+                          tensor.alloc(0., n_samples, sc.shape[2]),
+                          tensor.alloc(0., n_samples, sc.shape[0]),],
+            non_sequences=[pctx_, context, sc_pctx_, sc] + shared_vars
+            name=_p(prefix, '_layers'),
+            n_steps=nsteps,
+            profile=profile,
+            strict=True)
+return rval
 
 # generate sample, either with stochastic sampling or beam search. Note that,
 # this function iteratively calls f_init and f_next functions.
