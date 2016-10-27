@@ -102,8 +102,8 @@ layers = {'ff': ('param_init_fflayer', 'fflayer'),
           'lstm_cond_v2': ('param_init_lstm_cond_v2', 'lstm_cond_v2_layer'),
           'lstm_cond_v3': ('param_init_lstm_cond_v3', 'lstm_cond_v3_layer'),
           'lstm_cond_v6': ('param_init_lstm_cond_v6', 'lstm_cond_v6_layer'),
-          'lstm_cond_fall0': ('param_init_lstm_fall0', 'lstm_cond_fall0'),
-          'gru_cond_fall0': ('param_init_gru_fall0', 'gru_cond_fall0'),
+          'lstm_cond_fall0': ('param_init_lstm_cond_fall0', 'lstm_cond_fall0_layer'),
+          'gru_cond_fall0': ('param_init_gru_cond_fall0', 'gru_cond_fall0_layer'),
           }
 
 
@@ -4547,12 +4547,12 @@ def gru_cond_fall0_layer(tparams, state_below, options, prefix='gru_cond_fall0',
                           None,
                           tensor.alloc(0., n_samples, sc.shape[2]),
                           tensor.alloc(0., n_samples, sc.shape[0]),],
-            non_sequences=[pctx_, context, sc_pctx_, sc] + shared_vars
+            non_sequences=[pctx_, context, sc_pctx_, sc] + shared_vars,
             name=_p(prefix, '_layers'),
             n_steps=nsteps,
             profile=profile,
             strict=True)
-return rval
+    return rval
 
 # build a sampler
 def build_sampler(tparams, options, trng, use_noise=None):
