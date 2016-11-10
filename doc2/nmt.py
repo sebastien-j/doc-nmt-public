@@ -3777,6 +3777,12 @@ def init_params(options):
     params['Wemb'] = norm_weight(options['n_words_src'], options['dim_word'], rng=rng)
     params['Wemb_dec'] = norm_weight(options['n_words'], options['dim_word'], rng=rng)
 
+    if options['kwargs'].get('rnn_over_context', False):
+        params = get_layer(options['encoder'])[0](options, params,
+                                                  prefix='context_rnn',
+                                                  nin=options['dim_word'],
+                                                  dim=options['dim_word'], rng=rng)
+
     if options['kwargs'].get('context_birnn', False):
         if options['decoder'] != 'lstm_cond_v6':
             assert options['dim_word'] % 2 == 0
@@ -3897,9 +3903,19 @@ def build_model(tparams, options):
             context_emb = tparams['Wemb_sc'][xc.flatten()]
         else:
             context_emb = tparams['Wemb'][xc.flatten()]
-    context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
-    context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
+    if options['kwargs'].get('rnn_over_context', False):
+        context_emb = context_emb.reshape([n_timesteps_context * n_samples, max_words, options['dim_word']])
+        context_emb = context_emb.dimshuffle(1,0,2)
+        xc_mask_4 = xc_mask.reshape([n_timesteps_context * n_samples, max_words])
+        xc_mask_4 = xc_mask_4.dimshuffle(1,0)
+        context_emb = get_layer(options['encoder'])[1](tparams, context_emb, options,
+                                            prefix='context_rnn',
+                                            mask=xc_mask_4)[0][-1]
+        context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
+    else:
+        context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
+        context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
     if options['kwargs'].get('context_birnn', False):
         # not v6: output dim is dim_word
@@ -5325,9 +5341,19 @@ def build_sampler(tparams, options, trng, use_noise=None):
             context_emb = tparams['Wemb_sc'][xc.flatten()]
         else:
             context_emb = tparams['Wemb'][xc.flatten()]
-    context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
-    context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
+    if options['kwargs'].get('rnn_over_context', False):
+        context_emb = context_emb.reshape([n_timesteps_context * n_samples, max_words, options['dim_word']])
+        context_emb = context_emb.dimshuffle(1,0,2)
+        xc_mask_4 = xc_mask.reshape([n_timesteps_context * n_samples, max_words])
+        xc_mask_4 = xc_mask_4.dimshuffle(1,0)
+        context_emb = get_layer(options['encoder'])[1](tparams, context_emb, options,
+                                            prefix='context_rnn',
+                                            mask=xc_mask_4)[0][-1]
+        context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
+    else:
+        context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
+        context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
     if options['kwargs'].get('context_birnn', False):
         context_emb_fwd = get_layer(options['encoder'])[1](tparams, context_emb, options,
@@ -5377,9 +5403,11 @@ def build_sampler(tparams, options, trng, use_noise=None):
     else:
         outs = [init_state, ctx, context_emb]
     if options['kwargs'].get('context_birnn', False):
-        ins = [x, xc, xc_mask, xc_mask_2, xc_mask_3]
+        ins = [x, xc, xc_mask, xc_mask_2]
     else:
-        ins = [x, xc, xc_mask, xc_mask_3]
+        ins = [x, xc, xc_mask]
+    if not options['kwargs'].get('rnn_over_context', False):
+        ins.append(xc_mask_3)
 
     f_init = theano.function(ins, outs, name='f_init', profile=profile)
     print 'Done'
@@ -5484,9 +5512,13 @@ def gen_sample(tparams, f_init, f_next, x, xc, xc_mask, xc_mask_2, xc_mask_3, op
 
     # get initial state of decoder rnn and encoder context
     if options['kwargs'].get('context_birnn', False):
-        ret = f_init(x, xc, xc_mask, xc_mask_2, xc_mask_3)
+        ins = [x, xc, xc_mask, xc_mask_2]
     else:
-        ret = f_init(x, xc, xc_mask, xc_mask_3)
+        ins = [x, xc, xc_mask]
+    if not options['kwargs'].get('rnn_over_context', False):
+        ins.append(xc_mask_3)
+
+    ret = f_init(*ins)
     #print 'A', x.shape, xc.shape
     if options['decoder'].startswith('lstm'):
         next_state, ctx0, sc0, next_memory = ret[0], ret[1], ret[2], ret[3]
@@ -5616,9 +5648,19 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
             context_emb = tparams['Wemb_sc'][xc.flatten()]
         else:
             context_emb = tparams['Wemb'][xc.flatten()]
-    context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
 
-    context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
+    if options['kwargs'].get('rnn_over_context', False):
+        context_emb = context_emb.reshape([n_timesteps_context * n_samples, max_words, options['dim_word']])
+        context_emb = context_emb.dimshuffle(1,0,2)
+        xc_mask_4 = xc_mask.reshape([n_timesteps_context * n_samples, max_words])
+        xc_mask_4 = xc_mask_4.dimshuffle(1,0)
+        context_emb = get_layer(options['encoder'])[1](tparams, context_emb, options,
+                                            prefix='context_rnn',
+                                            mask=xc_mask_4)[0][-1]
+        context_emb = context_emb.reshape([n_timesteps_context, n_samples, options['dim_word']])
+    else:
+        context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
+        context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
     if options['kwargs'].get('context_birnn', False):
         context_emb_fwd = get_layer(options['encoder'])[1](tparams, context_emb, options,
@@ -5670,9 +5712,11 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     else:
         outs = [init_state, ctx, context_emb]
     if options['kwargs'].get('context_birnn', False):
-        ins = [x, xc, x_mask, xc_mask, xc_mask_2, xc_mask_3]
+        ins = [x, xc, x_mask, xc_mask, xc_mask_2]
     else:
-        ins = [x, xc, x_mask, xc_mask, xc_mask_3]
+        ins = [x, xc, x_mask, xc_mask]
+    if not options['kwargs'].get('rnn_over_context', False):
+        ins.append(xc_mask_3)
     f_init_2 = theano.function(ins, outs, name='f_init_2', profile=profile)
     print 'Done'
 
@@ -5756,9 +5800,12 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, xc_mask_2,
 
     # get initial state of decoder rnn and encoder context
     if options['kwargs'].get('context_birnn', False):
-        ret = f_init_2(x, xc, x_mask, xc_mask, xc_mask_2, xc_mask_3)
+        ins = [x, xc, x_mask, xc_mask, xc_mask_2]
     else:
-        ret = f_init_2(x, xc, x_mask, xc_mask, xc_mask_3)
+        ins = [x, xc, x_mask, xc_mask]
+    if not options['kwargs'].get('rnn_over_context', False):
+        ins.append(xc_mask_3)
+    ret = f_init_2(*ins)
     if options['decoder'].startswith('lstm'):
         next_state, ctx, sc, next_memory = ret[0], ret[1], ret[2], ret[3]
     else:
@@ -5803,7 +5850,10 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=False):
                                             n_words_src=options['n_words_src'],
                                             n_words=options['n_words'])
 
-        pprobs = f_log_probs(x, x_mask, y, y_mask, xc, xc_mask, xc_mask_2, xc_mask_3)
+        ins = [x, x_mask, y, y_mask, xc, xc_mask, xc_mask_2]
+        if not options['kwargs'].get('rnn_over_context', False):
+            ins.append(xc_mask_3)
+        pprobs = f_log_probs(*ins)
         for pp in pprobs:
             probs.append(pp)
 
@@ -6103,7 +6153,10 @@ def train(rng=123,
         opt_ret, \
         cost, xc_mask_2, xc_mask_3 = \
         build_model(tparams, model_options)
-    inps = [x, x_mask, y, y_mask, xc, xc_mask, xc_mask_2, xc_mask_3]
+    inps = [x, x_mask, y, y_mask, xc, xc_mask, xc_mask_2]
+
+    if not model_options['kwargs'].get('rnn_over_context', False):
+        inps.append(xc_mask_3)
 
     print 'Building sampler'
     f_init, f_next = build_sampler(tparams, model_options, trng, use_noise)
@@ -6228,7 +6281,10 @@ def train(rng=123,
             ud_start = time.time()
 
             # compute cost, grads and copy grads to shared variables
-            cost = f_grad_shared(x, x_mask, y, y_mask, xc, xc_mask, xc_mask_2, xc_mask_3)
+            cost_ins = [x, x_mask, y, y_mask, xc, xc_mask, xc_mask_2]
+            if not model_options['kwargs'].get('rnn_over_context', False):
+                cost_ins.append(xc_mask_3)
+            cost = f_grad_shared(*cost_ins)
 
             # do the update on parameters
             f_update(lrate)
