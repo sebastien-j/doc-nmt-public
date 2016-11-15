@@ -3807,6 +3807,17 @@ def init_params(options):
         params = get_layer('ff')[0](options, params, prefix='v6_context_emb',
                                     nin=options['dim_word'], nout=2*options['dim'], rng=rng)
 
+    if options['kwargs'].get('sentence_dep_context', False):
+        params['sdc_W'] = norm_weight(options['dim_word'], 2*options['dim'], rng=rng)
+
+        params['sdc_Wd_att'] = norm_weight(2*options['dim'], 2*options['dim'], rng=rng)
+
+        params['sdc_Wc_att'] = norm_weight(2*options['dim'], rng=rng)
+        params['sdc_b_att'] = numpy.zeros((2*options['dim'],)).astype('float32')
+
+        params['sdc_U_att'] = norm_weight(2*options['dim'], 1, rng=rng)
+        params['sdc_c_tt'] = numpy.zeros((1,)).astype('float32')
+
     # encoder: bidirectional RNN
     params = get_layer(options['encoder'])[0](options, params,
                                               prefix='encoder',
@@ -3917,6 +3928,9 @@ def build_model(tparams, options):
         context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
         context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
+    if options['kwargs'].get('sentence_dep_context', False):
+        context_emb = tensor.dot(context_emb, tparams['sdc_W'])
+
     if options['kwargs'].get('context_birnn', False):
         # not v6: output dim is dim_word
         # v6: output dim is ctx_dim
@@ -3964,6 +3978,33 @@ def build_model(tparams, options):
     # or you can use the last state of forward + backward encoder rnns
     # ctx_mean = concatenate([proj[0][-1], projr[0][-1]], axis=proj[0].ndim-2)
 
+    if options['kwargs'].get('sentence_dep_context', False):
+        sdc_pstate_ = tensor.dot(ctx_mean, tparams['sdc_Wd_att'])
+        proj_context_emb = tensor.dot(context_emb, tparams['sdc_Wc_att']) + tparams['sdc_b_att']
+
+        sdc_pctx__ = proj_context_emb + sdc_pstate_[None, :, :]
+        sdc_pctx__ = tensor.tanh(sdc_pctx__)
+
+        # compute alignment weights
+        sdc_alpha = tensor.dot(sdc_pctx__, tparams['sdc_U_att'])+tparams['sdc_c_tt']
+        sdc_alpha = sdc_alpha.reshape([sdc_alpha.shape[0], sdc_alpha.shape[1]])
+        sdc_alpha = tensor.exp(sdc_alpha)
+        sdc_alpha = sdc_alpha * xc_mask_2
+        sdc_alpha = sdc_alpha / sdc_alpha.sum(0, keepdims=True)
+
+        # compute the weighted averages - current context to gru
+        context_emb = (context_emb * sdc_alpha[:, :, None]).sum(0, keepdims=True)
+
+        # Concatenate external context representation to word representations
+        ctx = concatenate([context_emb, ctx], axis=0)
+
+        #Fix mask
+        ones = tensor.ones((1, n_samples), dtype='float32')
+        x_mask_ = concatenate(([ones, x_mask]), axis=0)
+        # We only change x_mask as xr_mask is not used past this point.
+    else:
+        x_mask_ = x_mask
+
     # initial decoder state
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
                                     prefix='ff_state', activ='tanh')
@@ -3989,7 +4030,7 @@ def build_model(tparams, options):
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
                                             prefix='decoder',
                                             mask=y_mask, context=ctx,
-                                            context_mask=x_mask,
+                                            context_mask=x_mask_,
                                             one_step=False,
                                             init_state=init_state,
                                             init_memory=init_memory,
@@ -4003,10 +4044,11 @@ def build_model(tparams, options):
     # weights (alignment matrix)
     opt_ret['dec_alphas'] = proj[2]
 
-    # weighted averages of source context
-    tsc = proj[4]
+    if not options['kwargs'].get('sentence_dep_context', False):
+        # weighted averages of source context
+        tsc = proj[4]
 
-    opt_ret['ctx_alphas'] = proj[5] #return h, ctx_, alpha.T, c, tsc, sc_alpha.T
+        opt_ret['ctx_alphas'] = proj[5] #return h, ctx_, alpha.T, c, tsc, sc_alpha.T
 
     # compute word probabilities
     logit_lstm = get_layer('ff')[1](tparams, proj_h, options,
@@ -5355,6 +5397,9 @@ def build_sampler(tparams, options, trng, use_noise=None):
         context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
         context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
+    if options['kwargs'].get('sentence_dep_context', False):
+        context_emb = tensor.dot(context_emb, tparams['sdc_W'])
+
     if options['kwargs'].get('context_birnn', False):
         context_emb_fwd = get_layer(options['encoder'])[1](tparams, context_emb, options,
                                             prefix='context_emb_fwd',
@@ -5391,6 +5436,27 @@ def build_sampler(tparams, options, trng, use_noise=None):
 
     # get the input for decoder rnn initializer mlp
     ctx_mean = ctx.mean(0)
+
+    if options['kwargs'].get('sentence_dep_context', False):
+        sdc_pstate_ = tensor.dot(ctx_mean, tparams['sdc_Wd_att'])
+        proj_context_emb = tensor.dot(context_emb, tparams['sdc_Wc_att']) + tparams['sdc_b_att']
+
+        sdc_pctx__ = proj_context_emb + sdc_pstate_[None, :, :]
+        sdc_pctx__ = tensor.tanh(sdc_pctx__)
+
+        # compute alignment weights
+        sdc_alpha = tensor.dot(sdc_pctx__, tparams['sdc_U_att'])+tparams['sdc_c_tt']
+        sdc_alpha = sdc_alpha.reshape([sdc_alpha.shape[0], sdc_alpha.shape[1]])
+        sdc_alpha = tensor.exp(sdc_alpha)
+        sdc_alpha = sdc_alpha * xc_mask_2
+        sdc_alpha = sdc_alpha / sdc_alpha.sum(0, keepdims=True)
+
+        # compute the weighted averages - current context to gru
+        context_emb = (context_emb * sdc_alpha[:, :, None]).sum(0, keepdims=True)
+
+        # Concatenate external context representation to word representations
+        ctx = concatenate([context_emb, ctx], axis=0)
+
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
                                     prefix='ff_state', activ='tanh')
@@ -5402,7 +5468,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
         outs = [init_state, ctx, context_emb, init_memory]
     else:
         outs = [init_state, ctx, context_emb]
-    if options['kwargs'].get('context_birnn', False):
+    if options['kwargs'].get('context_birnn', False) or options['kwargs'].get('sentence_dep_context', False):
         ins = [x, xc, xc_mask, xc_mask_2]
     else:
         ins = [x, xc, xc_mask]
@@ -5426,6 +5492,13 @@ def build_sampler(tparams, options, trng, use_noise=None):
 
     if not options['decoder'].startswith('lstm'):
         init_memory = None
+
+    if options['kwargs'].get('sentence_dep_context', False):
+        sc_ = None
+        sc_mask_ = None
+    else:
+        sc_ = sc
+        sc_mask_ = xc_mask_2
     # apply one step of conditional gru with attention
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
                                             prefix='decoder',
@@ -5433,7 +5506,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
                                             one_step=True,
                                             init_state=init_state,
                                             init_memory=init_memory,
-                                            sc=context_emb, sc_mask=xc_mask_2)
+                                            sc=sc_, sc_mask=sc_mask_)
     # get the next hidden state
     next_state = proj[0]
     if options['decoder'].startswith('lstm'):
@@ -5442,7 +5515,8 @@ def build_sampler(tparams, options, trng, use_noise=None):
     # get the weighted averages of context for this target word y
     ctxs = proj[1]
 
-    tsc = proj[4]
+    if not options['kwargs'].get('sentence_dep_context', False):
+        tsc = proj[4]
 
     logit_lstm = get_layer('ff')[1](tparams, next_state, options,
                                     prefix='ff_logit_lstm', activ='linear')
@@ -5475,10 +5549,16 @@ def build_sampler(tparams, options, trng, use_noise=None):
     # sampled word for the next target, next hidden state to be used
     print 'Building f_next..',
     if options['decoder'].startswith('lstm'):
-        inps = [y, ctx, init_state, context_emb, init_memory, xc_mask_2]
+        if options['kwargs'].get('sentence_dep_context', False):
+            inps = [y, ctx, init_state, init_memory]
+        else:
+            inps = [y, ctx, init_state, context_emb, init_memory, xc_mask_2]
         outs = [next_probs, next_sample, next_state, next_memory]
     else:
-        inps = [y, ctx, init_state, context_emb, xc_mask_2]
+        if options['kwargs'].get('sentence_dep_context', False):
+            inps = [y, ctx, init_state]
+        else:
+            inps = [y, ctx, init_state, context_emb, xc_mask_2]
         outs = [next_probs, next_sample, next_state]
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
     print 'Done'
@@ -5511,7 +5591,7 @@ def gen_sample(tparams, f_init, f_next, x, xc, xc_mask, xc_mask_2, xc_mask_3, op
         hyp_memories = []
 
     # get initial state of decoder rnn and encoder context
-    if options['kwargs'].get('context_birnn', False):
+    if options['kwargs'].get('context_birnn', False) or options['kwargs'].get('sentence_dep_context', False):
         ins = [x, xc, xc_mask, xc_mask_2]
     else:
         ins = [x, xc, xc_mask]
@@ -5534,9 +5614,15 @@ def gen_sample(tparams, f_init, f_next, x, xc, xc_mask, xc_mask_2, xc_mask_3, op
         sc = numpy.tile(sc0, [live_k, 1])
         xc_mask_2 = numpy.tile(xc_mask_2_0, [live_k])
         if options['decoder'].startswith('lstm'):
-            inps = [next_w, ctx, next_state, sc, next_memory, xc_mask_2]
+            if options['kwargs'].get('sentence_dep_context', False):
+                inps = [next_w, ctx, next_state, next_memory]
+            else:
+                inps = [next_w, ctx, next_state, sc, next_memory, xc_mask_2]
         else:
-            inps = [next_w, ctx, next_state, sc, xc_mask_2]
+            if options['kwargs'].get('sentence_dep_context', False):
+                inps = [next_w, ctx, next_state]
+            else:
+                inps = [next_w, ctx, next_state, sc, xc_mask_2]
         #print 'D', next_w.shape, ctx.shape, next_state.shape, sc.shape, next_memory.shape
         ret = f_next(*inps)
         if options['decoder'].startswith('lstm'):
@@ -5662,6 +5748,9 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
         context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
         context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
+    if options['kwargs'].get('sentence_dep_context', False):
+        context_emb = tensor.dot(context_emb, tparams['sdc_W'])
+
     if options['kwargs'].get('context_birnn', False):
         context_emb_fwd = get_layer(options['encoder'])[1](tparams, context_emb, options,
                                             prefix='context_emb_fwd',
@@ -5700,6 +5789,26 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     #ctx_mean = ctx.mean(0)
     ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
 
+    if options['kwargs'].get('sentence_dep_context', False):
+        sdc_pstate_ = tensor.dot(ctx_mean, tparams['sdc_Wd_att'])
+        proj_context_emb = tensor.dot(context_emb, tparams['sdc_Wc_att']) + tparams['sdc_b_att']
+
+        sdc_pctx__ = proj_context_emb + sdc_pstate_[None, :, :]
+        sdc_pctx__ = tensor.tanh(sdc_pctx__)
+
+        # compute alignment weights
+        sdc_alpha = tensor.dot(sdc_pctx__, tparams['sdc_U_att'])+tparams['sdc_c_tt']
+        sdc_alpha = sdc_alpha.reshape([sdc_alpha.shape[0], sdc_alpha.shape[1]])
+        sdc_alpha = tensor.exp(sdc_alpha)
+        sdc_alpha = sdc_alpha * xc_mask_2
+        sdc_alpha = sdc_alpha / sdc_alpha.sum(0, keepdims=True)
+
+        # compute the weighted averages - current context to gru
+        context_emb = (context_emb * sdc_alpha[:, :, None]).sum(0, keepdims=True)
+
+        # Concatenate external context representation to word representations
+        ctx = concatenate([context_emb, ctx], axis=0)
+
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
                                     prefix='ff_state', activ='tanh')
@@ -5711,7 +5820,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
         outs = [init_state, ctx, context_emb, init_memory]
     else:
         outs = [init_state, ctx, context_emb]
-    if options['kwargs'].get('context_birnn', False):
+    if options['kwargs'].get('context_birnn', False) or options['kwargs'].get('sentence_dep_context', False):
         ins = [x, xc, x_mask, xc_mask, xc_mask_2]
     else:
         ins = [x, xc, x_mask, xc_mask]
@@ -5722,6 +5831,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
 
     y = tensor.vector('y_sampler', dtype='int64')
     init_state = tensor.matrix('init_state', dtype='float32')
+    x_mask_ = tensor.matrix('x_mask_', dtype='float32')
 
     # if it's the first word, emb should be all zero and it is indicated by -1
     emb = tensor.switch(y[:, None] < 0,
@@ -5733,14 +5843,21 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
 
     if not options['decoder'].startswith('lstm'):
         init_memory = None
+
+    if options['kwargs'].get('sentence_dep_context', False):
+        sc_ = None
+        sc_mask_ = None
+    else:
+        sc_ = sc
+        sc_mask_ = xc_mask_2
     # apply one step of conditional gru with attention
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
                                             prefix='decoder',
-                                            mask=None, context=ctx, context_mask=x_mask,
+                                            mask=None, context=ctx, context_mask=x_mask_,
                                             one_step=True,
                                             init_state=init_state,
                                             init_memory=init_memory,
-                                            sc=context_emb, sc_mask=xc_mask_2)
+                                            sc=sc_, sc_mask=sc_mask_)
     # get the next hidden state
     next_state = proj[0]
     if options['decoder'].startswith('lstm'):
@@ -5749,7 +5866,8 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     # get the weighted averages of context for this target word y
     ctxs = proj[1]
 
-    tsc = proj[4]
+    if not options['kwargs'].get('sentence_dep_context', False):
+        tsc = proj[4]
 
     logit_lstm = get_layer('ff')[1](tparams, next_state, options,
                                     prefix='ff_logit_lstm', activ='linear')
@@ -5782,10 +5900,16 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     # sampled word for the next target, next hidden state to be used
     print 'Building f_next..',
     if options['decoder'].startswith('lstm'):
-        inps = [y, ctx, init_state, context_emb, init_memory, x_mask, xc_mask_2]
+        if options['kwargs'].get('sentence_dep_context', False):
+            inps = [y, ctx, init_state, init_memory, x_mask_]
+        else:
+            inps = [y, ctx, init_state, context_emb, init_memory, x_mask_, xc_mask_2]
         outs = [next_probs, next_sample, next_state, next_memory]
     else:
-        inps = [y, ctx, init_state, context_emb, x_mask, xc_mask_2]
+        if options['kwargs'].get('sentence_dep_context', False):
+            inps = [y, ctx, init_state, x_mask_]
+        else:
+            inps = [y, ctx, init_state, context_emb, x_mask_, xc_mask_2]
         outs = [next_probs, next_sample, next_state]
     f_next_2 = theano.function(inps, outs, name='f_next_2', profile=profile)
     print 'Done'
@@ -5795,11 +5919,10 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
 def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, xc_mask_2, xc_mask_3, options, trng=None, maxlen=30):
 
     # Always stochastic, always argmax
-
     sample = []
 
     # get initial state of decoder rnn and encoder context
-    if options['kwargs'].get('context_birnn', False):
+    if options['kwargs'].get('context_birnn', False) or options['kwargs'].get('sentence_dep_context', False):
         ins = [x, xc, x_mask, xc_mask, xc_mask_2]
     else:
         ins = [x, xc, x_mask, xc_mask]
@@ -5812,11 +5935,23 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, xc_mask_2,
         next_state, ctx, sc = ret[0], ret[1], ret[2]
     next_w = -1 * numpy.ones((x.shape[1],)).astype('int64')  # bos indicator
 
+    if options['kwargs'].get('sentence_dep_context', False):
+        x_mask_ = numpy.ones((1, x_mask.shape[1]), dtype=numpy.float32)
+        x_mask_ = numpy.concatenate((x_mask_, x_mask), axis=0)
+    else:
+        x_mask_ = x_mask
+
     for ii in xrange(maxlen):
         if options['decoder'].startswith('lstm'):
-            inps = [next_w, ctx, next_state, sc, next_memory, x_mask, xc_mask_2]
+            if options['kwargs'].get('sentence_dep_context', False):
+                inps = [next_w, ctx, next_state, next_memory, x_mask_]
+            else:
+                inps = [next_w, ctx, next_state, sc, next_memory, x_mask_, xc_mask_2]
         else:
-            inps = [next_w, ctx, next_state, sc, x_mask, xc_mask_2]
+            if options['kwargs'].get('sentence_dep_context', False):
+                inps = [next_w, ctx, next_state, x_mask_]
+            else:
+                inps = [next_w, ctx, next_state, sc, x_mask_, xc_mask_2]
         ret = f_next_2(*inps)
         if options['decoder'].startswith('lstm'):
             next_p, next_w, next_state, next_memory = ret[0], ret[1], ret[2], ret[3]
