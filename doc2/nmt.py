@@ -5497,7 +5497,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
         sc_ = None
         sc_mask_ = None
     else:
-        sc_ = sc
+        sc_ = context_emb
         sc_mask_ = xc_mask_2
     # apply one step of conditional gru with attention
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
@@ -5848,7 +5848,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
         sc_ = None
         sc_mask_ = None
     else:
-        sc_ = sc
+        sc_ = context_emb
         sc_mask_ = xc_mask_2
     # apply one step of conditional gru with attention
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
