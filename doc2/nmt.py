@@ -3807,9 +3807,10 @@ def init_params(options):
         params = get_layer('ff')[0](options, params, prefix='v6_context_emb',
                                     nin=options['dim_word'], nout=2*options['dim'], rng=rng)
 
-    if options['kwargs'].get('sentence_dep_context', False):
+    if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
         params['sdc_W'] = norm_weight(options['dim_word'], 2*options['dim'], rng=rng)
 
+    if options['kwargs'].get('sentence_dep_context', False):
         params['sdc_Wd_att'] = norm_weight(2*options['dim'], 2*options['dim'], rng=rng)
 
         params['sdc_Wc_att'] = norm_weight(2*options['dim'], rng=rng)
@@ -3928,7 +3929,7 @@ def build_model(tparams, options):
         context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
         context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
-    if options['kwargs'].get('sentence_dep_context', False):
+    if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
         context_emb = tensor.dot(context_emb, tparams['sdc_W'])
 
     if options['kwargs'].get('context_birnn', False):
@@ -4002,6 +4003,9 @@ def build_model(tparams, options):
         ones = tensor.ones((1, n_samples), dtype='float32')
         x_mask_ = concatenate(([ones, x_mask]), axis=0)
         # We only change x_mask as xr_mask is not used past this point.
+    elif options['kwargs'].get('concat_context', False):
+        ctx = concatenate([context_emb, ctx], axis=0)
+        x_mask_ = concatenate([xc_mask_2, x_mask], axis=0)
     else:
         x_mask_ = x_mask
 
@@ -4044,7 +4048,7 @@ def build_model(tparams, options):
     # weights (alignment matrix)
     opt_ret['dec_alphas'] = proj[2]
 
-    if not options['kwargs'].get('sentence_dep_context', False):
+    if not options['kwargs'].get('sentence_dep_context', False) and not options['kwargs'].get('concat_context', False):
         # weighted averages of source context
         tsc = proj[4]
 
@@ -5397,7 +5401,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
         context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
         context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
-    if options['kwargs'].get('sentence_dep_context', False):
+    if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
         context_emb = tensor.dot(context_emb, tparams['sdc_W'])
 
     if options['kwargs'].get('context_birnn', False):
@@ -5456,6 +5460,8 @@ def build_sampler(tparams, options, trng, use_noise=None):
 
         # Concatenate external context representation to word representations
         ctx = concatenate([context_emb, ctx], axis=0)
+    elif options['kwargs'].get('concat_context', False):
+        ctx = concatenate([context_emb, ctx], axis=0)
 
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
@@ -5500,6 +5506,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
         sc_ = context_emb
         sc_mask_ = xc_mask_2
     # apply one step of conditional gru with attention
+    # TODO: Verify if mask=None is ok with 'concat_context'
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
                                             prefix='decoder',
                                             mask=None, context=ctx,
@@ -5515,7 +5522,7 @@ def build_sampler(tparams, options, trng, use_noise=None):
     # get the weighted averages of context for this target word y
     ctxs = proj[1]
 
-    if not options['kwargs'].get('sentence_dep_context', False):
+    if not options['kwargs'].get('sentence_dep_context', False) and not options['kwargs'].get('concat_context', False):
         tsc = proj[4]
 
     logit_lstm = get_layer('ff')[1](tparams, next_state, options,
@@ -5549,13 +5556,13 @@ def build_sampler(tparams, options, trng, use_noise=None):
     # sampled word for the next target, next hidden state to be used
     print 'Building f_next..',
     if options['decoder'].startswith('lstm'):
-        if options['kwargs'].get('sentence_dep_context', False):
+        if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
             inps = [y, ctx, init_state, init_memory]
         else:
             inps = [y, ctx, init_state, context_emb, init_memory, xc_mask_2]
         outs = [next_probs, next_sample, next_state, next_memory]
     else:
-        if options['kwargs'].get('sentence_dep_context', False):
+        if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
             inps = [y, ctx, init_state]
         else:
             inps = [y, ctx, init_state, context_emb, xc_mask_2]
@@ -5614,12 +5621,12 @@ def gen_sample(tparams, f_init, f_next, x, xc, xc_mask, xc_mask_2, xc_mask_3, op
         sc = numpy.tile(sc0, [live_k, 1])
         xc_mask_2 = numpy.tile(xc_mask_2_0, [live_k])
         if options['decoder'].startswith('lstm'):
-            if options['kwargs'].get('sentence_dep_context', False):
+            if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
                 inps = [next_w, ctx, next_state, next_memory]
             else:
                 inps = [next_w, ctx, next_state, sc, next_memory, xc_mask_2]
         else:
-            if options['kwargs'].get('sentence_dep_context', False):
+            if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
                 inps = [next_w, ctx, next_state]
             else:
                 inps = [next_w, ctx, next_state, sc, xc_mask_2]
@@ -5748,7 +5755,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
         context_emb = context_emb.reshape([n_timesteps_context, n_samples, max_words, options['dim_word']])
         context_emb = (context_emb * xc_mask[:,:,:,None]).sum(2) / xc_mask_3[:,:,None] # sum(2): sum over words
 
-    if options['kwargs'].get('sentence_dep_context', False):
+    if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
         context_emb = tensor.dot(context_emb, tparams['sdc_W'])
 
     if options['kwargs'].get('context_birnn', False):
@@ -5808,6 +5815,8 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
 
         # Concatenate external context representation to word representations
         ctx = concatenate([context_emb, ctx], axis=0)
+    elif options['kwargs'].get('concat_context', False):
+        ctx = concatenate([context_emb, ctx], axis=0)
 
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
@@ -5844,7 +5853,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     if not options['decoder'].startswith('lstm'):
         init_memory = None
 
-    if options['kwargs'].get('sentence_dep_context', False):
+    if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
         sc_ = None
         sc_mask_ = None
     else:
@@ -5866,7 +5875,7 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     # get the weighted averages of context for this target word y
     ctxs = proj[1]
 
-    if not options['kwargs'].get('sentence_dep_context', False):
+    if not options['kwargs'].get('sentence_dep_context', False) and not options['kwargs'].get('concat_context', False):
         tsc = proj[4]
 
     logit_lstm = get_layer('ff')[1](tparams, next_state, options,
@@ -5900,13 +5909,13 @@ def build_sampler_2(tparams, options, trng, use_noise=None):
     # sampled word for the next target, next hidden state to be used
     print 'Building f_next..',
     if options['decoder'].startswith('lstm'):
-        if options['kwargs'].get('sentence_dep_context', False):
+        if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
             inps = [y, ctx, init_state, init_memory, x_mask_]
         else:
             inps = [y, ctx, init_state, context_emb, init_memory, x_mask_, xc_mask_2]
         outs = [next_probs, next_sample, next_state, next_memory]
     else:
-        if options['kwargs'].get('sentence_dep_context', False):
+        if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
             inps = [y, ctx, init_state, x_mask_]
         else:
             inps = [y, ctx, init_state, context_emb, x_mask_, xc_mask_2]
@@ -5938,17 +5947,19 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, xc, x_mask, xc_mask, xc_mask_2,
     if options['kwargs'].get('sentence_dep_context', False):
         x_mask_ = numpy.ones((1, x_mask.shape[1]), dtype=numpy.float32)
         x_mask_ = numpy.concatenate((x_mask_, x_mask), axis=0)
+    elif options['kwargs'].get('concat_context', False):
+        x_mask_ = numpy.concatenate((xc_mask_2, x_mask), axis=0)
     else:
         x_mask_ = x_mask
 
     for ii in xrange(maxlen):
         if options['decoder'].startswith('lstm'):
-            if options['kwargs'].get('sentence_dep_context', False):
+            if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
                 inps = [next_w, ctx, next_state, next_memory, x_mask_]
             else:
                 inps = [next_w, ctx, next_state, sc, next_memory, x_mask_, xc_mask_2]
         else:
-            if options['kwargs'].get('sentence_dep_context', False):
+            if options['kwargs'].get('sentence_dep_context', False) or options['kwargs'].get('concat_context', False):
                 inps = [next_w, ctx, next_state, x_mask_]
             else:
                 inps = [next_w, ctx, next_state, sc, x_mask_, xc_mask_2]
