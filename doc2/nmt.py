@@ -5506,7 +5506,6 @@ def build_sampler(tparams, options, trng, use_noise=None):
         sc_ = context_emb
         sc_mask_ = xc_mask_2
     # apply one step of conditional gru with attention
-    # TODO: Verify if mask=None is ok with 'concat_context'
     proj = get_layer(options['decoder'])[1](tparams, emb, options,
                                             prefix='decoder',
                                             mask=None, context=ctx,
