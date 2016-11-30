@@ -1357,6 +1357,9 @@ def gru_cond_legacy_layer(tparams, state_below, options, prefix='gru_cond_legacy
         # compute alignment weights
         alpha = tensor.dot(pctx__, U_att)+c_tt
         alpha = alpha.reshape([alpha.shape[0], alpha.shape[1]])
+        if options['kwargs'].get('stable', False):
+            max_alpha = alpha.max(axis=0)
+            alpha = alpha - max_alpha
         alpha = tensor.exp(alpha)
         if context_mask:
             alpha = alpha * context_mask
