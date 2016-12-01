@@ -1847,11 +1847,12 @@ def build_model(tparams, options):
     # cost
     y_flat = y.flatten()
     y_flat_idx = tensor.arange(y_flat.shape[0]) * options['n_words'] + y_flat
-    cost = -tensor.log(probs.flatten()[y_flat_idx])
-    cost = cost.reshape([y.shape[0], y.shape[1]])
-    cost = (cost * y_mask).sum(0)
+    cost_ = -tensor.log(probs.flatten()[y_flat_idx])
+    cost_ = cost_.reshape([y.shape[0], y.shape[1]])
+    cost_ = (cost_ * y_mask)
+    cost = cost_.sum(0)
 
-    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost
+    return trng, use_noise, x, x_mask, y, y_mask, opt_ret, cost, cost_
 
 
 # build a sampler
@@ -2226,7 +2227,7 @@ def gen_sample_2(tparams, f_init_2, f_next_2, x, x_mask, options, trng=None, max
 ########
 
 # calculate the log probablities on a given corpus using translation model
-def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=False):
+def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=False, **kwargs):
     probs = []
 
     n_done = 0
@@ -2239,16 +2240,23 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=False):
                                             n_words=options['n_words'])
 
         pprobs = f_log_probs(x, x_mask, y, y_mask)
-        for pp in pprobs:
-            probs.append(pp)
 
-        if numpy.isnan(numpy.mean(probs)):
-            ipdb.set_trace()
+        if kwargs.get('as_list', False):
+            for pp in pprobs.T:
+                probs.append(pp)
+        else:
+            for pp in pprobs:
+                probs.append(pp)
+            if numpy.isnan(numpy.mean(probs)):
+                ipdb.set_trace()
 
         if verbose:
             print >>sys.stderr, '%d samples computed' % (n_done)
 
-    return numpy.array(probs)
+    if kwargs.get('as_list', False):
+        return probs
+    else:
+        return numpy.array(probs)
 
 def greedy_decoding(options, reference, iterator, worddicts_r, tparams, prepare_data, gen_sample_2, f_init_2, f_next_2, trng, multibleu, fname, maxlen=200, verbose=False):
     n_done = 0
@@ -2508,7 +2516,7 @@ def train(rng=123,
     trng, use_noise, \
         x, x_mask, y, y_mask, \
         opt_ret, \
-        cost = \
+        cost, cost_ = \
         build_model(tparams, model_options)
     inps = [x, x_mask, y, y_mask]
 
